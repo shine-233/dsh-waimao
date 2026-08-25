@@ -27,7 +27,10 @@
 | ⏰ **定时任务** | WA收件箱轮询、序列执行、回复扫描、官网监控、每日管线日报、停跟进提醒 |
 | 💬 **WhatsApp** | 客服审核台（AI草稿+人工审核）、媒体消息（发报价PDF）、受控群发（随机间隔+每日上限+3连败熔断） |
 | 📄 **报价** | 英文报价单 PDF（零依赖手写生成）、自动关联CRM |
-| 📈 **效果统计** | 漏斗转化、分层回复率、市场分布、回复分类、触达量 |
+| 📈 **效果统计** | 漏斗转化、分层回复率、市场分布、回复分类、触达量、**打开率/点击率** |
+| 📬 **打开/点击追踪** | 发信自动注入像素+链接包裹（HTML替身），公网反代模式，防开放重定向 |
+| 🔥 **邮箱预热** | 爬坡闸门（第1周5封/天，每周+5）+ 主账号↔伙伴账号自动互动（互发/回复/标星） |
+| 🩺 **送达率体检** | SPF/DKIM/DMARC/MX DNS检查 + 修复建议，首封开发信前必跑 |
 
 ## 安装
 
@@ -80,6 +83,31 @@ npx -y @deepseek-ai/dsh plugin --profile web add github:shine-233/dsh-waimao
   "webhookToken": "随机字符串"
 }
 ```
+
+## 追踪与预热（需要公网入口）
+
+dsh 只绑 127.0.0.1，收件人的邮件客户端打不到本机。要启用打开/点击追踪，给插件一个公网入口：
+
+```bash
+# 方式一：cloudflared 隧道（无需公网IP）
+cloudflared tunnel --url http://127.0.0.1:3080
+# 方式二：同机 caddy/nginx 反代
+# track.example.com → 127.0.0.1:3080
+```
+
+然后 `config.track.publicBaseUrl` 填该域名。未配置时追踪静默关闭。安全设计：像素/点击端点用 24 位随机 ID（不可枚举），点击只 302 到发送时登记过的 URL（防开放重定向），响应零数据。
+
+邮箱预热（新域名/新账号必做，否则必进垃圾箱）：
+
+```jsonc
+"warmup": {
+  "enabled": true,
+  "maxPerDay": 30,
+  "partners": [{ "host": "smtp.partner.com", "user": "b@partner.com", "pass": "***", "imapHost": "imap.partner.com" }]
+}
+```
+
+cron 每天自动跑一轮互动（主账号↔伙伴账号互发+自动回复+标星），爬坡第1周限5封/天、每周+5。发信前先 `deliverability_check` 体检 SPF/DKIM/DMARC。
 
 ## 安全设计
 

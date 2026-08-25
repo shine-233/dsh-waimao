@@ -77,12 +77,14 @@ function dotStuff(mime) {
 }
 
 /**
- * 组装 MIME 邮件。
- * @param {{from, fromName?, to, toName?, subject, body, replyTo?, inReplyTo?, references?, attachments?: [{filename, contentType?, base64}]}} message
+ * 组装 MIME 邮件。支持 html（multipart/alternative）、附件（multipart/mixed）、
+ * 两者叠加（mixed > alternative > plain+html+attachments）。
+ * @param {{from, fromName?, to, toName?, subject, body, html?, replyTo?, inReplyTo?, references?, attachments?: [{filename, contentType?, base64}]}} message
  * @returns {string} 完整 MIME 文本
  */
 export function buildMime(message) {
   const boundary = `=_waimao_${createHash('md5').update(`${message.to}${randomUUID()}`).digest('hex').slice(0, 16)}`;
+  const altBoundary = `${boundary}alt`;
   const fromName = message.fromName ? `${encodeHeader(message.fromName)} ` : '';
   const headers = [
     `From: ${fromName}<${message.from}>`,
@@ -102,20 +104,41 @@ export function buildMime(message) {
     headers.push(`References: ${[...refs, message.inReplyTo].join(' ')}`);
   }
   const files = Array.isArray(message.attachments) ? message.attachments.filter((f) => f?.base64) : [];
+  const hasHtml = typeof message.html === 'string' && message.html.trim() !== '';
+
+  const plainPart =
+    `--${hasHtml ? altBoundary : boundary}${CRLF}Content-Type: text/plain; charset=UTF-8${CRLF}Content-Transfer-Encoding: base64${CRLF}${CRLF}` +
+    b64Lines(message.body ?? '') + CRLF;
+  const htmlPart = hasHtml
+    ? `--${altBoundary}${CRLF}Content-Type: text/html; charset=UTF-8${CRLF}Content-Transfer-Encoding: base64${CRLF}${CRLF}` +
+      b64Lines(message.html) + CRLF
+    : '';
+  const alternativeBlock = hasHtml
+    ? `--${boundary}${CRLF}Content-Type: multipart/alternative; boundary="${altBoundary}"${CRLF}${CRLF}` +
+      plainPart + htmlPart + `--${altBoundary}--${CRLF}`
+    : plainPart;
+
+  const attachmentParts = files
+    .map(
+      (file) =>
+        `--${boundary}${CRLF}` +
+        `Content-Type: ${file.contentType ?? 'application/octet-stream'}; name="${encodeHeader(file.filename)}"${CRLF}` +
+        `Content-Disposition: attachment; filename="${encodeHeader(file.filename)}"${CRLF}` +
+        `Content-Transfer-Encoding: base64${CRLF}${CRLF}` +
+        String(file.base64).replace(/(.{76})/g, `$1${CRLF}`) + CRLF,
+    )
+    .join('');
+
   let mime;
-  if (files.length > 0) {
+  if (files.length > 0 || hasHtml) {
     headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
-    mime = headers.join(CRLF) + CRLF + CRLF;
-    mime += `--${boundary}${CRLF}Content-Type: text/plain; charset=UTF-8${CRLF}Content-Transfer-Encoding: base64${CRLF}${CRLF}`;
-    mime += b64Lines(message.body ?? '') + CRLF;
-    for (const file of files) {
-      mime += `--${boundary}${CRLF}`;
-      mime += `Content-Type: ${file.contentType ?? 'application/octet-stream'}; name="${encodeHeader(file.filename)}"${CRLF}`;
-      mime += `Content-Disposition: attachment; filename="${encodeHeader(file.filename)}"${CRLF}`;
-      mime += `Content-Transfer-Encoding: base64${CRLF}${CRLF}`;
-      mime += String(file.base64).replace(/(.{76})/g, `$1${CRLF}`) + CRLF;
+    mime = headers.join(CRLF) + CRLF + CRLF + alternativeBlock + attachmentParts + `--${boundary}--${CRLF}`;
+    // 无附件只有 alternative 时，mixed 里只有一个 alternative 子块——合法但多余，
+    // 直接用 alternative 作为顶层更干净：
+    if (files.length === 0) {
+      headers[headers.length - 1] = `Content-Type: multipart/alternative; boundary="${altBoundary}"`;
+      mime = headers.join(CRLF) + CRLF + CRLF + plainPart + htmlPart + `--${altBoundary}--${CRLF}`;
     }
-    mime += `--${boundary}--${CRLF}`;
   } else {
     headers.push('Content-Type: text/plain; charset=UTF-8');
     headers.push('Content-Transfer-Encoding: base64');

@@ -208,6 +208,16 @@ export async function monitorJob() {
     : `${result.checked} checked, no changes`;
 }
 
+/** 邮箱预热（每天一轮互动）。 */
+export async function warmupJob() {
+  const warmup = await import('./warmup.js');
+  if (!warmup.warmupConfigured()) {
+    return 'warmup not configured';
+  }
+  const result = await warmup.runWarmupRound({});
+  return result.skipped ?? `${result.results?.filter((r) => r.ok).length ?? 0} warmup legs ok`;
+}
+
 /** 每日管线日报。 */
 export async function dailyReportJob() {
   const stats = crm.crmStats();

@@ -36,6 +36,9 @@ import * as sopMod from './sop.js';
 import * as statsMod from './stats.js';
 import * as storeMod from './store.js';
 import * as suppressMod from './suppress.js';
+import * as trackMod from './track.js';
+import * as warmupMod from './warmup.js';
+import { deliverabilityCheck } from './deliverability.js';
 
 export const name = 'waimao';
 
@@ -82,6 +85,8 @@ export function apply(ctx) {
   registerQuotePdfTool(ctx);
   registerCronStatusTool(ctx);
   registerAuditQueryTool(ctx);
+  registerWarmupStatusTool(ctx);
+  registerDeliverabilityCheckTool(ctx);
 
   if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (scope) => {
@@ -128,9 +133,18 @@ async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId
     auditMod.audit('email.dry_run', { to, subject, leadId, preview: previewFile }, actor);
     return { dryRun: true, previewFile, message: 'smtp.dry_run=true：未真实发送，草稿已存盘' };
   }
-  const result = await sendMail(smtp, { from: smtp.from, fromName: smtp.fromName, to, toName, subject, body: finalBody, replyTo: smtp.replyTo, inReplyTo, references, attachments });
-  auditMod.audit('email.send', { to, subject, leadId, messageId: result.messageId, threaded: Boolean(inReplyTo) }, actor);
-  return { dryRun: false, ...result };
+  // 打开/点击追踪：配置了公网入口时，生成 HTML 替身（像素+链接包裹）
+  let html;
+  let tracking = null;
+  const trackBase = trackMod.trackingEnabled();
+  if (trackBase) {
+    tracking = trackMod.createTracking({ leadId, to, subject });
+    const built = trackMod.buildTrackedHtml({ text: finalBody, trackId: tracking.id, base: trackBase });
+    html = built.html;
+  }
+  const result = await sendMail(smtp, { from: smtp.from, fromName: smtp.fromName, to, toName, subject, body: finalBody, html, replyTo: smtp.replyTo, inReplyTo, references, attachments });
+  auditMod.audit('email.send', { to, subject, leadId, messageId: result.messageId, threaded: Boolean(inReplyTo), tracked: Boolean(tracking) }, actor);
+  return { dryRun: false, trackId: tracking?.id ?? null, ...result };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1084,7 +1098,7 @@ function registerAuditQueryTool(ctx) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', description: '如 email.send / wa.send / crm.status / sop.stage' },
+        action: { type: 'string', description: '如 email.send / wa.send / crm.status / sop.stage / track.open' },
         actor: { type: 'string', enum: ['agent', 'user', 'cron'] },
         limit: { type: 'number' },
       },
@@ -1094,6 +1108,59 @@ function registerAuditQueryTool(ctx) {
     presentCall: (args) => ({ card: 'generic', title: 'audit_query', kind: 'list', rawInput: args }),
     async execute(args) {
       return { entries: auditMod.queryAudit({ action: args?.action, actor: args?.actor, limit: Math.min(Math.max(args?.limit ?? 50, 1), 300) }) };
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* 工具：送达率 + 预热（v0.4）                                          */
+/* ------------------------------------------------------------------ */
+
+function registerDeliverabilityCheckTool(ctx) {
+  ctx.tools.register({
+    name: 'deliverability_check',
+    description:
+      '发信域名送达率体检：SPF/DKIM/DMARC/MX 的 DNS 检查 + 可执行修复建议。第一次真实发开发信之前必跑。',
+    parameters: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: '发信域名（smtp.from 的 @ 后部分），缺省自动取 smtp.from' },
+        dkim_selector: { type: 'string', description: '自定义 DKIM selector（可选）' },
+      },
+    },
+    timeoutMs: 60_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: 'deliverability_check', kind: 'check', rawInput: args }),
+    async execute(args) {
+      const domain = String(args?.domain ?? '').trim() || String(smtpOf().from ?? '').split('@')[1] || '';
+      if (!domain) {
+        throw new Error('没有 domain：传 domain 参数或先配置 smtp.from');
+      }
+      return deliverabilityCheck(domain, { dkimSelector: args?.dkim_selector });
+    },
+  });
+}
+
+function registerWarmupStatusTool(ctx) {
+  ctx.tools.register({
+    name: 'warmup_status',
+    description:
+      '邮箱预热：status=查看爬坡进度与今日额度；run=手动跑一轮互动预热（主账号↔伙伴账号互发+自动回复+标星，cron 每天也会跑）。新域名/新账号先预热再发开发信，否则必进垃圾箱。',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['status', 'run'], description: '默认status' },
+      },
+    },
+    timeoutMs: 180_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: `warmup_status: ${args?.action ?? 'status'}`, kind: 'status', rawInput: args }),
+    async execute(args) {
+      if (args?.action === 'run') {
+        const result = await warmupMod.runWarmupRound({});
+        return { ...result, budget: warmupMod.todayBudget() };
+      }
+      return warmupMod.warmupStatus();
     },
   });
 }
@@ -1567,6 +1634,30 @@ function registerRoutes(scope) {
     httpMod.sendJson(res, 200, cronMod.status());
   });
 
+  // 追踪端点（公开可达：经用户反代进来的邮件客户端请求）。
+  // 不走回环围栏，但 ID 不可枚举 + 只重定向到发送时登记的 URL + 零数据响应。
+  route('waimao-px', 'exact', '/waimao/px', (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    const id = url.searchParams.get('id') ?? '';
+    if (trackMod.isValidTrackId(id)) {
+      trackMod.recordOpen(id, req.headers?.['user-agent']);
+    }
+    res.writeHead(200, { 'content-type': 'image/gif', 'cache-control': 'no-store', pragma: 'no-cache' });
+    res.end(trackMod.PIXEL);
+  });
+
+  route('waimao-click', 'exact', '/waimao/click', (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    const cid = url.searchParams.get('c') ?? '';
+    const target = trackMod.isValidClickId(cid) ? trackMod.recordClick(cid) : null;
+    if (!target || !/^https?:\/\//i.test(target)) {
+      res.writeHead(404).end();
+      return;
+    }
+    res.writeHead(302, { location: target });
+    res.end();
+  });
+
   // Evolution webhook（token 校验）
   route('waimao-webhook', 'exact', '/waimao/webhook/evolution', async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -1613,6 +1704,9 @@ function startCron() {
   const monitorH = config.cron?.monitorEveryHour ?? 6;
   if (monitorH > 0) {
     cronMod.registerJob('monitor', { everyMs: monitorH * 3_600_000, description: '客户官网变化监控(意图信号)', fn: cronMod.monitorJob });
+  }
+  if (config.warmup?.enabled === true) {
+    cronMod.registerJob('warmup', { everyMs: 24 * 3_600_000, description: '邮箱预热(互动轮)', fn: cronMod.warmupJob });
   }
   // 每日日报：按 HH:mm 触发（每 30 分钟检查一次时间）
   cronMod.registerJob('dailyReport', {

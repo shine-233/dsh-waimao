@@ -64,6 +64,22 @@ export const DEFAULT_CONFIG = {
     pass: '', // Gmail 需应用专用密码
     mailbox: 'INBOX',
   },
+  track: {
+    // 打开/点击追踪的公网入口。dsh 只绑 127.0.0.1，需要你用 caddy/nginx/
+    // cloudflared 把一个域名反代到本机 3080 端口，然后填这里，如
+    // https://track.example.com。留空 = 追踪关闭（不注入像素/不包裹链接）。
+    publicBaseUrl: '',
+    secret: '', // 点击 ID 签名密钥，留空用内置默认
+  },
+  warmup: {
+    enabled: false, // 预热总闸
+    maxPerDay: 30, // 爬坡封顶（第1周5封/天，每周+5）
+    autoReply: true,
+    // 伙伴账号：与主 smtp 账号互发+自动互动。至少配 1 个：
+    // [{ host, smtpPort?, smtpSecure?, user, pass, from?, fromName?,
+    //    imapHost, imapPort?, imapSecure?, imapMailbox? }]
+    partners: [],
+  },
   cron: {
     enabled: true,
     waSyncEveryMin: 30, // WhatsApp 收件箱轮询周期（0=关闭）
@@ -199,6 +215,8 @@ export function configSummary() {
     },
     cron: config.cron ?? {},
     wa: config.wa ?? {},
+    track: { enabled: hasKey(config.track?.publicBaseUrl), publicBaseUrl: config.track?.publicBaseUrl ?? '' },
+    warmup: { enabled: config.warmup?.enabled === true, partners: (config.warmup?.partners ?? []).length },
     webhookTokenSet: hasKey(config.webhookToken),
   };
 }

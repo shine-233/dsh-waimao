@@ -3,6 +3,7 @@
 import * as crm from './crm.js';
 import { queryAudit } from './audit.js';
 import { suppressStats } from './suppress.js';
+import { trackStats } from './track.js';
 
 export function report() {
   const leads = crm.listLeads({ limit: 5000 });
@@ -67,7 +68,8 @@ export function report() {
     byMarket,
     replyCategories,
     outreach: { emailSent, emailDryRun, waSent, sequencesRunning },
+    tracking: trackStats(),
     suppressed: suppressStats().total,
-    hint: '回复率低(<5%)时：换模板/换分层/换市场；极高分层回复率应显著高于低分层，否则评分标准需要校准',
+    hint: '回复率低(<5%)时：换模板/换分层/换市场；极高分层回复率应显著高于低分层，否则评分标准需要校准；打开率高但回复低=内容问题，打开率低=送达率/标题问题',
   };
 }

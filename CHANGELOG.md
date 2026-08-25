@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 (2026-08-25)
+
+补齐「常驻服务器基建」最后两块：打开/点击追踪 + 邮箱预热 + 送达率体检。
+
+### 追踪（打开/点击）
+- `track.publicBaseUrl` 配置公网入口（caddy/nginx/cloudflared 反代到本机 3080），未配置则静默关闭
+- 发信自动生成 HTML 替身（multipart/alternative）：1x1 像素 + 链接包裹
+- `/waimao/px` + `/waimao/click` 公开端点：24位随机ID不可枚举、点击只 302 到发送时登记的 URL（防开放重定向）、同一天重复打开去重、零数据响应
+- `stats_report` 新增打开率/点击率
+
+### 邮箱预热（单机自托管版）
+- 爬坡闸门：第1周5封/天，每周+5，封顶可配——防止新域名直接群发进垃圾箱
+- 互动预热：主账号↔伙伴账号互发带标签邮件，cron 自动回复+标星，模拟真实往来
+- `warmup_status`（status/run）
+
+### 送达率体检
+- `deliverability_check`：SPF/DKIM/DMARC/MX 的 DNS 检查（DKIM 探测常见 selector）+ 可执行修复建议 + rDNS 人工指引
+
 ## 0.3.0 (2026-08-25)
 
 补上「发出去之后」的回路：回复检测闭环 + 合规 + 背调 + 意图信号 + 度量。
