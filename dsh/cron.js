@@ -105,6 +105,8 @@ import * as crm from './crm.js';
 import * as waStore from './store.js';
 import * as evolution from './evolution.js';
 import { dueSteps, stopSequence } from './mail/sequence.js';
+import { scanReplies } from './mail/replies.js';
+import * as monitorMod from './monitor.js';
 
 const STATE_FILE = join(DATA_DIR, 'cron.json');
 
@@ -129,12 +131,13 @@ export function createSequenceJob({ sendEmail }) {
           break;
         }
         try {
-          const result = await sendEmail({ lead, to: email, subject: step.subject, body: step.body });
+          const result = await sendEmail({ lead, to: email, subject: step.subject, body: step.body, inReplyTo: lead.lastMessageId });
           step.status = 'sent';
           step.sentAt = new Date().toISOString();
           crm.updateLead(lead.id, {
             sequence: lead.sequence,
             status: lead.status === 'new' || lead.status === 'qualified' ? 'contacted' : lead.status,
+            ...(result?.messageId ? { lastMessageId: result.messageId } : {}),
           }, { activityNote: `跟进序列 Day${step.day} 已发送: ${step.subject}` });
           sent += 1;
         } catch (error) {
@@ -179,6 +182,30 @@ function writeReport(name, content) {
   const file = join(dir, `${name}.md`);
   writeFileSync(file, content, { mode: 0o600 });
   return file;
+}
+
+/** IMAP 回复扫描（回复检测闭环的 cron 半边）。 */
+export async function replyScanJob() {
+  const config = readConfig();
+  if (!config.imap?.host || !config.imap?.user) {
+    return 'imap not configured';
+  }
+  const result = await scanReplies({ days: 14, limit: 30 });
+  return result.replies.length > 0
+    ? `${result.replies.length} replies (${result.replies.map((item) => item.category).join(',')})`
+    : 'no replies';
+}
+
+/** 客户官网变化监控（意图信号）。 */
+export async function monitorJob() {
+  const stats = monitorMod.stats();
+  if (stats.targets === 0) {
+    return 'no watched sites';
+  }
+  const result = await monitorMod.checkAll({ limit: 30 });
+  return result.changed.length > 0
+    ? `${result.changed.length}/${result.checked} sites changed`
+    : `${result.checked} checked, no changes`;
 }
 
 /** 每日管线日报。 */

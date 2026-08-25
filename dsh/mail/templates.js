@@ -7,7 +7,14 @@ export function isLatam(marketKeyOrDial) {
 }
 
 export function languageFor(market) {
-  return isLatam(market) ? 'es' : 'en';
+  const key = String(market ?? '').toLowerCase();
+  if (key === 'br' || key === '+55') {
+    return 'pt';
+  }
+  if (['mx', 'ar', 'cl', 'co', 'pe', '+52', '+54', '+56', '+57', '+51'].includes(key)) {
+    return 'es';
+  }
+  return 'en';
 }
 
 const T = {
@@ -43,7 +50,38 @@ const T = {
         me,
       ].join('\n'),
   },
+  pt: {
+    subject: (product, company) => `Fornecimento de ${product} para ${company} — direto de fábrica`,
+    body: ({ name, company, product, me, features }) =>
+      [
+        `Olá ${name || 'tudo bem'},`,
+        '',
+        `Sou ${me}. Fornecemos ${product} para importadores e atacadistas — ${features}.`,
+        '',
+        `Vimos que a ${company || 'sua empresa'} atua nesse segmento e gostaríamos de nos conectar.`,
+        '',
+        'Gostaria de receber nosso catálogo com preços FOB de referência?',
+        '',
+        'Atenciosamente,',
+        me,
+      ].join('\n'),
+  },
 };
+
+export const UNSUBSCRIBE_FOOTER = {
+  en: 'If you\'d rather not hear from me again, just reply "STOP".',
+  es: 'Si no desea recibir más mensajes, responda "ALTO".',
+  pt: 'Se não quiser receber mais mensagens, responda "PARAR".',
+};
+
+/** 追加退订脚注（合规）。 */
+export function withUnsubscribeFooter(draft, language) {
+  const footer = UNSUBSCRIBE_FOOTER[language] ?? UNSUBSCRIBE_FOOTER.en;
+  if (String(draft.body ?? '').includes(footer)) {
+    return draft;
+  }
+  return { ...draft, body: `${draft.body}\n\n--\n${footer}` };
+}
 
 export const FOLLOW_UPS = [
   {

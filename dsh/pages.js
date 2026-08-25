@@ -375,6 +375,16 @@ const SETTINGS_SECTIONS = [
     ],
   },
   {
+    key: 'imap', title: 'IMAP (回复检测)',
+    fields: [
+      ['host', '服务器(如 imap.gmail.com)', 'text'],
+      ['port', '端口', 'number'],
+      ['user', '账号', 'text'],
+      ['pass', '密码/授权码', 'password'],
+      ['mailbox', '邮箱夹', 'text'],
+    ],
+  },
+  {
     key: 'cron', title: '定时任务',
     fields: [
       ['enabled', '启用', 'select', [['true', '开'], ['false', '关']]],
@@ -406,7 +416,7 @@ function settingsPage() {
         return `<label>${esc(label)}</label><input type="${type}" data-section="${section.key}" data-key="${key}">`;
       })
       .join('');
-    const testButton = ['serp', 'smtp', 'evolution', 'deepseek'].includes(section.key)
+    const testButton = ['serp', 'smtp', 'imap', 'evolution', 'deepseek'].includes(section.key)
       ? `<button class="mini ghost" onclick="testConn('${section.key}',this)">测试连通</button>`
       : '';
     return `<div class="panel"><h2>${esc(section.title)}</h2><div class="kv">${fields}</div><div class="msg status" id="t-${section.key}"></div>${testButton}</div>`;

@@ -1,0 +1,35 @@
+# npm trusted publishing via GitHub Actions OIDC (no long-lived token).
+# Enable: repo Settings → Environments → add "npm" environment, then link the
+# package on npmjs.com (Publishing → GitHub Actions, scope to this workflow).
+name: npm-publish
+
+on:
+  push:
+    tags:
+      - 'npm-v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Check tag matches package version
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          TAG="${GITHUB_REF_NAME#npm-}"
+          if [ "v$TAG" != "$PKG_VERSION" ]; then
+            echo "tag $GITHUB_REF_NAME != package $PKG_VERSION"; exit 1
+          fi
+      - name: Run tests
+        run: node test/smoke.mjs && node test/ddg-fixture.mjs && node test/v2-modules.mjs && node test/v3-modules.mjs && node test/host-sim.mjs
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

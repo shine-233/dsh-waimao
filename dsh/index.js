@@ -12,15 +12,19 @@ import * as crmMod from './crm.js';
 import { toCsv, crmRow, CRM_CSV_HEADERS } from './csv.js';
 import * as cronMod from './cron.js';
 import * as draftMod from './draft.js';
+import { companyDossier } from './enrich/dossier.js';
 import * as enrichMod from './enrich.js';
 import { findEmail, verifyEmail, guessEmails } from './enrich/emailfind.js';
 import * as evolutionMod from './evolution.js';
 import * as httpMod from './http.js';
 import * as kbMod from './kb.js';
 import * as leadsMod from './leads.js';
+import { imapProbe } from './mail/imap.js';
 import * as composeMod from './mail/compose.js';
 import { newSequence, dueSteps, sequenceSummary, stopSequence } from './mail/sequence.js';
+import { scanReplies } from './mail/replies.js';
 import { sendMail } from './mail/smtp.js';
+import * as monitorMod from './monitor.js';
 import { marketOptions } from './markets.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -29,7 +33,9 @@ import { quotePdf, quoteFileName } from './pdf.js';
 import { readConfig, EXPORT_DIR } from './config.js';
 import { scoreLead } from './score.js';
 import * as sopMod from './sop.js';
+import * as statsMod from './stats.js';
 import * as storeMod from './store.js';
+import * as suppressMod from './suppress.js';
 
 export const name = 'waimao';
 
@@ -47,8 +53,14 @@ export function apply(ctx) {
   registerEmailVerifyTool(ctx);
   registerEmailComposeTool(ctx);
   registerEmailSendTool(ctx);
+  registerEmailScanRepliesTool(ctx);
+  registerEmailSuppressTool(ctx);
+  registerEmailStatsTool(ctx);
   registerSequenceStartTool(ctx);
   registerSequenceStatusTool(ctx);
+  registerCompanyDossierTool(ctx);
+  registerMonitorWatchTool(ctx);
+  registerMonitorCheckTool(ctx);
   registerCrmListTool(ctx);
   registerCrmUpdateTool(ctx);
   registerCrmActivityTool(ctx);
@@ -92,21 +104,32 @@ function smtpOf() {
   return config.smtp ?? {};
 }
 
-/** 发送邮件的唯一入口：尊重 smtp.dry_run 总闸 + 审计。 */
-async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId, actor = 'agent' }) {
+/** 发送邮件的唯一入口：抑制列表拦截 + dry_run 总闸 + 退订脚注 + 线程头 + 审计。 */
+async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId, actor = 'agent', inReplyTo, references, isFirstEmail }) {
   const smtp = smtpOf();
   if (!smtp.host || !smtp.from) {
     throw new Error('SMTP 未配置（settings 页或 ~/.waimao/config.json 的 smtp 段）');
   }
+  // 合规：抑制列表拦截
+  const suppressed = suppressMod.isSuppressed(to);
+  if (suppressed) {
+    throw new Error(`收件人 ${to} 在抑制列表中（${suppressed.reason}，${suppressed.ts.slice(0, 10)}），拒绝发送`);
+  }
+  // 合规：首封开发信追加退订提示
+  let finalBody = String(body ?? '');
+  if (isFirstEmail && smtp.unsubscribeFooter !== false) {
+    const { withUnsubscribeFooter } = await import('./mail/templates.js');
+    finalBody = withUnsubscribeFooter({ body: finalBody }, 'en').body;
+  }
   if (smtp.dryRun !== false) {
     const previewFile = join(EXPORT_DIR, `draft-${Date.now().toString(36)}.txt`);
     mkdirSync(EXPORT_DIR, { recursive: true });
-    writeFileSync(previewFile, `To: ${to}\nSubject: ${subject}\n\n${body}`, { mode: 0o600 });
+    writeFileSync(previewFile, `To: ${to}\nSubject: ${subject}\n${inReplyTo ? `In-Reply-To: ${inReplyTo}` : ''}\n\n${finalBody}`, { mode: 0o600 });
     auditMod.audit('email.dry_run', { to, subject, leadId, preview: previewFile }, actor);
     return { dryRun: true, previewFile, message: 'smtp.dry_run=true：未真实发送，草稿已存盘' };
   }
-  const result = await sendMail(smtp, { from: smtp.from, fromName: smtp.fromName, to, toName, subject, body, replyTo: smtp.replyTo, attachments });
-  auditMod.audit('email.send', { to, subject, leadId, messageId: result.messageId }, actor);
+  const result = await sendMail(smtp, { from: smtp.from, fromName: smtp.fromName, to, toName, subject, body: finalBody, replyTo: smtp.replyTo, inReplyTo, references, attachments });
+  auditMod.audit('email.send', { to, subject, leadId, messageId: result.messageId, threaded: Boolean(inReplyTo) }, actor);
   return { dryRun: false, ...result };
 }
 
@@ -408,17 +431,22 @@ function registerEmailSendTool(ctx) {
       if (!to) {
         throw new Error(`线索 ${lead.id} 没有邮箱（先 email_find 或 lead_enrich）`);
       }
+      const isFirstEmail = !lead.lastMessageId && ['new', 'qualified'].includes(lead.status);
       const result = await sendEmailGuarded({
         to,
         toName: lead.company,
         subject: String(args?.subject ?? ''),
         body: String(args?.body ?? ''),
         leadId: lead.id,
+        // 跟进邮件挂原线程（回复检测依赖 In-Reply-To）
+        inReplyTo: lead.lastMessageId,
+        isFirstEmail,
       });
       if (!result.dryRun) {
         crmMod.updateLead(lead.id, {
           status: ['new', 'qualified'].includes(lead.status) ? 'contacted' : lead.status,
-        }, { activityNote: `开发信已发送: ${args?.subject}` });
+          ...(result.messageId ? { lastMessageId: result.messageId } : {}),
+        }, { activityNote: `开发信已发送${isFirstEmail ? '(首封)' : '(跟进)'}: ${args?.subject}` });
       } else {
         crmMod.addActivity(lead.id, { type: 'email-draft', note: `[dry-run] 预览: ${args?.subject}` });
       }
@@ -1071,6 +1099,145 @@ function registerAuditQueryTool(ctx) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 工具：回复扫描 / 抑制列表 / 背调 / 监控 / 统计（v0.3）                */
+/* ------------------------------------------------------------------ */
+
+function registerEmailScanRepliesTool(ctx) {
+  ctx.tools.register({
+    name: 'email_scan_replies',
+    description:
+      '扫描收件箱找买家回复（IMAP）：按 CRM 线索邮箱搜索最近 N 天来信，AI 分类（interested/pricing/not-interested/ooo/auto/unsubscribe），自动改状态 replied、停跟进序列、退订自动进抑制列表。cron 也会定期跑，这个工具用于手动触发/补扫。',
+    parameters: {
+      type: 'object',
+      properties: {
+        days: { type: 'number', description: '回溯天数，默认14' },
+        limit: { type: 'number', description: '最多检查线索数，默认30' },
+        use_ai: { type: 'boolean', description: 'AI分类，默认true（无key回退规则）' },
+      },
+    },
+    timeoutMs: 300_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: 'email_scan_replies', kind: 'fetch', rawInput: args }),
+    async execute(args, exec) {
+      const result = await scanReplies({ days: args?.days, limit: args?.limit, useAI: args?.use_ai, signal: exec?.signal });
+      return {
+        ...result,
+        hint: result.replies.length > 0
+          ? '回复已自动落库。interested/pricing 的线索建议立即跟进：看 lastReply.summary 与 suggestedAction。'
+          : '本轮没有新回复。',
+      };
+    },
+  });
+}
+
+function registerEmailSuppressTool(ctx) {
+  ctx.tools.register({
+    name: 'email_suppress',
+    description: '管理邮件抑制列表（合规）：add=加入（此后拒绝向该地址发信）/ remove=移除 / list=查看。买家要求退订、投诉、地址失效时加入。',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'remove', 'list'], description: '默认list' },
+        email: { type: 'string' },
+        reason: { type: 'string', description: 'unsubscribe/bounce/complaint/manual' },
+      },
+    },
+    timeoutMs: 15_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: `email_suppress: ${args?.action ?? 'list'}`, kind: 'update', rawInput: args }),
+    async execute(args) {
+      if (args?.action === 'add') {
+        return suppressMod.suppress(args?.email, args?.reason ?? 'manual', 'user');
+      }
+      if (args?.action === 'remove') {
+        return suppressMod.unsuppress(args?.email, 'user');
+      }
+      return suppressMod.suppressStats();
+    },
+  });
+}
+
+function registerEmailStatsTool(ctx) {
+  ctx.tools.register({
+    name: 'stats_report',
+    description: '效果统计：漏斗转化、分层回复率、市场分布、回复分类、触达量。回复数据来自 email_scan_replies 自动检测。',
+    parameters: { type: 'object', properties: {} },
+    timeoutMs: 15_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: 'stats_report', kind: 'report', rawInput: args }),
+    async execute() {
+      return statsMod.report();
+    },
+  });
+}
+
+function registerCompanyDossierTool(ctx) {
+  ctx.tools.register({
+    name: 'company_dossier',
+    description:
+      '公司背调：RDAP 查 WHOIS（域名年龄/注册商/到期，新域名<6个月标警）+ 首页技术栈指纹（Shopify/WooCommerce/WordPress/像素等）+ 业务信号（招聘=扩张、进口职能等）。可落库到 CRM 线索。',
+    parameters: {
+      type: 'object',
+      properties: {
+        lead_id: { type: 'string', description: 'CRM线索ID（可选，结果落库）' },
+        domain: { type: 'string', description: '域名（无 lead_id 时必填）' },
+      },
+    },
+    timeoutMs: 90_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: `company_dossier: ${args?.domain ?? args?.lead_id ?? ''}`, kind: 'research', rawInput: args }),
+    async execute(args, exec) {
+      if (!args?.lead_id && !args?.domain) {
+        throw new Error('需要 lead_id 或 domain');
+      }
+      return companyDossier({ lead_id: args?.lead_id, domain: args?.domain, signal: exec?.signal });
+    },
+  });
+}
+
+function registerMonitorWatchTool(ctx) {
+  ctx.tools.register({
+    name: 'monitor_watch',
+    description:
+      '监控客户官网变化（意图信号）：add/remove/list。cron 定期检查页面哈希，变化时记 CRM 活动（命中 new product/hiring/expansion 等信号词会特别标注）——客户扩张/换供应商时是最佳触达时机。',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'remove', 'list'], description: '默认list' },
+        lead_id: { type: 'string' },
+        url: { type: 'string', description: '默认监控线索官网首页' },
+      },
+    },
+    timeoutMs: 15_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: `monitor_watch: ${args?.action ?? 'list'}`, kind: 'update', rawInput: args }),
+    async execute(args) {
+      if (args?.action === 'add') {
+        return monitorMod.watch(String(args?.lead_id ?? ''), { url: args?.url });
+      }
+      if (args?.action === 'remove') {
+        return monitorMod.unwatch(String(args?.lead_id ?? ''));
+      }
+      return { ...monitorMod.stats(), targets: monitorMod.listWatched() };
+    },
+  });
+}
+
+function registerMonitorCheckTool(ctx) {
+  ctx.tools.register({
+    name: 'monitor_check',
+    description: '手动检查一轮全部被监控的客户官网（cron 也会自动跑）。',
+    parameters: { type: 'object', properties: { limit: { type: 'number' } } },
+    timeoutMs: 300_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: 'monitor_check', kind: 'fetch', rawInput: args }),
+    async execute(args, exec) {
+      return monitorMod.checkAll({ limit: args?.limit, signal: exec?.signal });
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* 回环路由（5 页面 + JSON API + webhook）                              */
 /* ------------------------------------------------------------------ */
 
@@ -1163,6 +1330,10 @@ function registerRoutes(scope) {
           signal: AbortSignal.timeout(30_000),
         });
         send(response.ok, response.ok ? 'DeepSeek 正常' : `HTTP ${response.status}`);
+      } else if (name === 'imap') {
+        const config = readConfig();
+        const message = await imapProbe(config.imap ?? {});
+        send(true, message);
       } else {
         httpMod.sendJson(res, 404, { error: `unknown test: ${name}` });
       }
@@ -1170,7 +1341,7 @@ function registerRoutes(scope) {
       httpMod.sendJson(res, 200, { ok: false, error: String(error?.message ?? error).slice(0, 300) });
     }
   };
-  for (const engine of ['serp', 'smtp', 'evolution', 'deepseek']) {
+  for (const engine of ['serp', 'smtp', 'evolution', 'deepseek', 'imap']) {
     route(`waimao-test-${engine}`, 'exact', `/waimao/api/test/${engine}`, testHandler);
   }
 
@@ -1434,6 +1605,14 @@ function startCron() {
   const waMin = config.cron?.waSyncEveryMin ?? 30;
   if (waMin > 0) {
     cronMod.registerJob('waInbox', { everyMs: waMin * 60_000, description: 'WhatsApp 收件箱轮询', fn: cronMod.waInboxJob });
+  }
+  const replyMin = config.cron?.replyScanEveryMin ?? 30;
+  if (replyMin > 0) {
+    cronMod.registerJob('replyScan', { everyMs: replyMin * 60_000, description: 'IMAP 回复扫描+AI分类', fn: cronMod.replyScanJob });
+  }
+  const monitorH = config.cron?.monitorEveryHour ?? 6;
+  if (monitorH > 0) {
+    cronMod.registerJob('monitor', { everyMs: monitorH * 3_600_000, description: '客户官网变化监控(意图信号)', fn: cronMod.monitorJob });
   }
   // 每日日报：按 HH:mm 触发（每 30 分钟检查一次时间）
   cronMod.registerJob('dailyReport', {

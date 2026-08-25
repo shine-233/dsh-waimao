@@ -53,11 +53,23 @@ export const DEFAULT_CONFIG = {
     // 总闸：true 时一切邮件发送只走预览不真实发送。确认配置无误后改 false。
     dryRun: true,
     replyTo: '',
+    // 开发信末尾追加退订提示行（合规）。回复 STOP 的地址自动进抑制列表。
+    unsubscribeFooter: true,
+  },
+  imap: {
+    host: '', // 如 imap.gmail.com / imap.qiye.aliyun.com
+    port: 993,
+    secure: true,
+    user: '', // 与 smtp.user 通常相同
+    pass: '', // Gmail 需应用专用密码
+    mailbox: 'INBOX',
   },
   cron: {
     enabled: true,
     waSyncEveryMin: 30, // WhatsApp 收件箱轮询周期（0=关闭）
     sequenceCheckEveryMin: 60, // 邮件序列到期检查周期
+    replyScanEveryMin: 30, // IMAP 回复扫描周期（0=关闭）
+    monitorEveryHour: 6, // 客户官网变化检查周期（0=关闭）
     dailyReportAt: '09:00', // 每日管线日报时间（本机时区）
     staleDays: 7, // 多少天没动作算停跟进
   },

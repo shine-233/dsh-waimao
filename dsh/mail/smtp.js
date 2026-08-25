@@ -78,7 +78,7 @@ function dotStuff(mime) {
 
 /**
  * 组装 MIME 邮件。
- * @param {{from, fromName?, to, toName?, subject, body, replyTo?, attachments?: [{filename, contentType?, base64}]}} message
+ * @param {{from, fromName?, to, toName?, subject, body, replyTo?, inReplyTo?, references?, attachments?: [{filename, contentType?, base64}]}} message
  * @returns {string} 完整 MIME 文本
  */
 export function buildMime(message) {
@@ -94,6 +94,12 @@ export function buildMime(message) {
   ];
   if (message.replyTo) {
     headers.push(`Reply-To: ${message.replyTo}`);
+  }
+  // 回复线程：跟进邮件挂到原邮件线程下（In-Reply-To + References）
+  if (message.inReplyTo) {
+    headers.push(`In-Reply-To: ${message.inReplyTo}`);
+    const refs = String(message.references ?? '').split(/\s+/).filter(Boolean);
+    headers.push(`References: ${[...refs, message.inReplyTo].join(' ')}`);
   }
   const files = Array.isArray(message.attachments) ? message.attachments.filter((f) => f?.base64) : [];
   let mime;

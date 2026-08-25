@@ -24,17 +24,21 @@ description: 外贸获客全家桶方法论：三层搜索→线索加工(提取
 - **dry_run**：smtp.dry_run 默认 true，发送只存预览。帮用户首次真实发送前要确认用户已在设置页关闸
 - **群发**：`wa_broadcast` 默认 dry_run；真实发送有每日上限+随机间隔+3连败熔断，提醒用户封号风险
 - **报价**：`quote_pdf` 生成英文 PDF（先 kb_search 查报价政策），可 `wa_send_media` 发送，自动记 CRM 活动、状态改 quoted
-- **客户回复**：`crm_update` 状态改 replied（自动停邮件序列）；WhatsApp 消息走审核台 `wa_review_queue` → `wa_reply`
-- **定时任务**：`cron_status` 查看序列/收件箱轮询/日报；`cron_status {run:"sequence"}` 手动触发
+- **客户回复**：`email_scan_replies` 自动检测（cron 也跑）并分类落库；WhatsApp 消息走审核台 `wa_review_queue` → `wa_reply`。状态改 replied 自动停序列
+- **背调**：重要客户先 `company_dossier`（域名年龄<6个月标警、技术栈、招聘信号）
+- **时机**：高价值线索 `monitor_watch` 盯官网，变化=触达时机
+- **合规**：退订地址自动进抑制列表，发送被强制拦截；不要建议用户绕过
+- **度量**：定期 `stats_report` 看分层回复率——极高分层应显著高于低分层，否则校准评分
+- **定时任务**：`cron_status` 查看全部任务；`cron_status {run:"replyScan"}` 手动触发
 
 ## 工具速查
 
 | 阶段 | 工具 |
 |---|---|
 | 搜索 | lead_search / lead_export_csv |
-| 加工 | lead_enrich / lead_score / email_find / email_verify |
-| 邮件 | email_compose / email_send / email_sequence_start / email_sequence_status |
-| CRM | crm_list / crm_update / crm_activity / crm_export |
+| 加工 | lead_enrich / lead_score / email_find / email_verify / company_dossier |
+| 邮件 | email_compose / email_send / email_sequence_start / email_sequence_status / **email_scan_replies** / email_suppress / **stats_report** |
+| CRM | crm_list / crm_update / crm_activity / crm_export / **monitor_watch** / **monitor_check** |
 | SOP | sop_create / sop_next / sop_review / sop_approve / sop_status |
 | 知识 | kb_search / kb_upsert / kb_list |
 | WhatsApp | wa_sync / wa_review_queue / wa_reply / wa_send_text / wa_send_media / wa_broadcast |

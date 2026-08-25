@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0 (2026-08-25)
+
+补上「发出去之后」的回路：回复检测闭环 + 合规 + 背调 + 意图信号 + 度量。
+
+### 回复检测闭环（最大断点补齐）
+- 零依赖 IMAP 客户端（TLS/LOGIN/SELECT/SEARCH/FETCH，字面量分块解析）
+- `email_scan_replies`：按 CRM 线索邮箱扫描来信 → AI 分类（interested/pricing/not-interested/ooo/auto/unsubscribe）→ 自动改 replied + 停序列 + 记活动
+- 退订回复自动进抑制列表；cron 定期扫描（`replyScanEveryMin`）
+
+### 合规
+- 抑制列表：发送前强制拦截，`email_suppress` 管理，退订自动加入
+- 开发信自动追加退订提示行（可关）；回复线程头（In-Reply-To/References）让跟进挂原线程
+
+### 背调与信号
+- `company_dossier`：RDAP 查 WHOIS（域名年龄，<6个月标警）+ 首页技术栈指纹（Shopify/Woo/WordPress/像素等）+ 业务信号（招聘=扩张）
+- `monitor_watch`/`monitor_check`：客户官网变化监控（changedetection 思路），命中 new product/hiring 等信号词特别标注，cron 自动跑
+
+### 度量
+- `stats_report`：漏斗转化、分层回复率、市场分布、回复分类分布、触达量
+
+### 其他
+- 葡语模板（巴西自动切 pt）；IMAP 设置区块+测试按钮；npm 发布工作流（trusted publishing）；英文 README
+
 ## 0.2.0 (2026-08-25)
 
 从「骨架」到「全家桶」：补齐线索质量加工、邮件触达、流程管理、自动化四大块。
