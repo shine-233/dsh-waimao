@@ -71,7 +71,79 @@ export function quotePdf(opts) {
     add(`Note: ${note}`, { size: 8, gap: 2 });
   }
 
-  // 排版成页面（每页 ~46 行）
+  return renderPdf(lines);
+}
+
+/**
+ * PI 形式发票（Proforma Invoice）：比报价单更正式——Incoterms、HS 编码、
+ * 原产国、银行信息、双方签章栏。用于客户开信用证/预付/清关预估。
+ * opts: {piNo, date, validUntil, from:{company,email,phone,address}, to:{company,contact,address,country},
+ *        items:[{desc, hsCode, qty, unitPrice}], currency, incoterm, payment, leadTime,
+ *        origin, destination, bank:{name, account, swift, beneficiary}, notes}
+ */
+export function proformaPdf(opts) {
+  const currency = opts.currency ?? 'USD';
+  const items = Array.isArray(opts.items) ? opts.items : [];
+  const subtotal = items.reduce((sum, item) => sum + Number(item.qty ?? 0) * Number(item.unitPrice ?? 0), 0);
+  const incoterm = opts.incoterm ?? 'FOB';
+
+  const lines = [];
+  const add = (text, { size = 10, bold = false, gap = 6 } = {}) => lines.push({ text, size, bold, gap });
+
+  add('PROFORMA INVOICE', { size: 17, bold: true, gap: 4 });
+  add(`No.: ${opts.piNo ?? 'PI-' + Date.now().toString(36).toUpperCase()}    Date: ${opts.date ?? new Date().toISOString().slice(0, 10)}    Valid Until: ${opts.validUntil ?? '15 days'}`, { size: 9, gap: 14 });
+
+  add('SELLER / EXPORTER', { size: 9, bold: true, gap: 2 });
+  add(opts.from?.company ?? '-', { size: 10, gap: 1 });
+  add([opts.from?.address, opts.from?.email, opts.from?.phone].filter(Boolean).join(', ').slice(0, 100), { size: 8.5, gap: 10 });
+
+  add('BUYER / IMPORTER', { size: 9, bold: true, gap: 2 });
+  add(opts.to?.company ?? '-', { size: 10, gap: 1 });
+  add([opts.to?.contact, opts.to?.address, opts.to?.country].filter(Boolean).join(', ').slice(0, 100), { size: 8.5, gap: 12 });
+
+  add('GOODS', { size: 10, bold: true, gap: 4 });
+  add('No.  Description                        HS Code       Qty      Unit Price    Amount', { size: 9, gap: 2 });
+  add('-'.repeat(88), { size: 9, gap: 4 });
+  items.forEach((item, index) => {
+    const qty = Number(item.qty ?? 0);
+    const price = Number(item.unitPrice ?? 0);
+    add(
+      `${String(index + 1).padEnd(5)}${String(item.desc ?? '').slice(0, 32).padEnd(34)}${String(item.hsCode ?? '').padEnd(14)}${String(qty).padEnd(9)}${price.toFixed(2).padStart(12)}  ${(qty * price).toFixed(2).padStart(11)}`,
+      { size: 8.5, gap: 3 },
+    );
+  });
+  add('-'.repeat(88), { size: 9, gap: 4 });
+  add(`TOTAL AMOUNT: ${currency} ${subtotal.toFixed(2)}  (${incoterm})`, { size: 12, bold: true, gap: 14 });
+
+  add(`Country of Origin: ${opts.origin ?? 'China'}        Destination: ${opts.destination ?? opts.to?.country ?? '-'}`, { size: 9, gap: 2 });
+  add(`Incoterms 2020: ${incoterm}`, { size: 9, gap: 2 });
+  add(`Payment Terms: ${opts.payment ?? 'T/T 30% deposit, 70% against copy of B/L'}`, { size: 9, gap: 2 });
+  add(`Lead Time: ${opts.leadTime ?? '25-35 days after deposit'}`, { size: 9, gap: 12 });
+
+  if (opts.bank?.name || opts.bank?.account) {
+    add('BANK DETAILS', { size: 9, bold: true, gap: 2 });
+    add(`Beneficiary: ${opts.bank.beneficiary ?? opts.from?.company ?? '-'}`, { size: 8.5, gap: 1 });
+    add(`Bank: ${opts.bank.name ?? '-'}`, { size: 8.5, gap: 1 });
+    add(`Account: ${opts.bank.account ?? '-'}    SWIFT: ${opts.bank.swift ?? '-'}`, { size: 8.5, gap: 12 });
+  }
+
+  for (const note of wrap(opts.notes ?? '', 95)) {
+    add(`Note: ${note}`, { size: 8, gap: 2 });
+  }
+  add('This proforma invoice is for quotation/customs estimation and is not a final commercial invoice.', { size: 8, gap: 16 });
+
+  add('SELLER SIGNATURE', { size: 9, bold: true, gap: 2 });
+  add('_______________________', { size: 9, gap: 2 });
+  add(opts.from?.company ?? '', { size: 9, gap: 2 });
+  add('BUYER ACCEPTANCE (optional)', { size: 9, bold: true, gap: 2 });
+  add('_______________________', { size: 9, gap: 2 });
+  add(opts.to?.company ?? '', { size: 9 });
+
+  return renderPdf(lines);
+}
+
+/** 共用渲染：lines → 分页 → PDF 对象组装。 */
+function renderPdf(lines) {
   const pagesContent = [];
   let current = [];
   let y = 800;

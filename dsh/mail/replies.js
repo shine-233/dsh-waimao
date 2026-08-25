@@ -9,6 +9,7 @@ import { imapLogin, imapSelect, imapSearchFrom, imapFetchMessage, imapLogout } f
 import { audit } from '../audit.js';
 
 const RULES = [
+  { category: 'bounce', re: /undeliverable|delivery (status|failure) notification|returned mail|mailbox (not found|unavailable)|address does not exist|user unknown|退信/i },
   { category: 'unsubscribe', re: /\bunsubscribe\b|\bopt[- ]?out\b|don'?t (want|contact)|remove me|退订|不要再联系/i },
   { category: 'not-interested', re: /not interested|no thanks|we (are )?covered|don'?t need|no need|不感兴趣|暂无需求/i },
   { category: 'ooo', re: /out of (the )?office|annual leave|vacation until|back (on|in) (monday|the office)|自动回复/i },
@@ -131,9 +132,9 @@ export async function scanReplies(opts = {}) {
             ? classifyReply(message.body, message.subject)
             : (await aiClassify(message.body, message.subject).catch(() => null)) ?? classifyReply(message.body, message.subject);
 
-          // 退订 → 抑制列表
-          if (classification.category === 'unsubscribe') {
-            suppress.suppress(leadEmail, 'unsubscribe-reply', 'cron');
+          // 退订 → 抑制列表；退信 → 抑制列表（地址已失效，继续发伤域名信誉）
+          if (classification.category === 'unsubscribe' || classification.category === 'bounce') {
+            suppress.suppress(leadEmail, classification.category === 'bounce' ? 'hard-bounce' : 'unsubscribe-reply', 'cron');
           }
 
           // 更新 CRM：状态 replied + 停序列 + 记活动

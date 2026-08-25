@@ -26,7 +26,7 @@ import { scanReplies } from './mail/replies.js';
 import { sendMail } from './mail/smtp.js';
 import * as monitorMod from './monitor.js';
 import { marketOptions } from './markets.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, statSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as pagesMod from './pages.js';
 import { quotePdf, quoteFileName } from './pdf.js';
@@ -41,6 +41,11 @@ import * as warmupMod from './warmup.js';
 import { deliverabilityCheck } from './deliverability.js';
 import * as templatesMod from './templates.js';
 import { toVcf, toVCard } from './csv.js';
+import { calcPrice, quoteLines } from './pricing.js';
+import { proformaPdf } from './pdf.js';
+import { scanMarkets } from './market.js';
+import { videoScript, renderScript } from './content.js';
+import { MARKETS } from './markets.js';
 
 export const name = 'waimao';
 
@@ -90,6 +95,11 @@ export function apply(ctx) {
   registerWarmupStatusTool(ctx);
   registerDeliverabilityCheckTool(ctx);
   registerTemplateTools(ctx);
+  registerPriceCalcTool(ctx);
+  registerProformaPdfTool(ctx);
+  registerMarketScanTool(ctx);
+  registerVideoScriptTool(ctx);
+  registerDataBackupTool(ctx);
 
   if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (scope) => {
@@ -112,9 +122,29 @@ function smtpOf() {
   return config.smtp ?? {};
 }
 
+/** 多收件账号轮换：配了 smtp.accounts 就轮询选号，否则用主账号。 */
+function pickSmtpAccount() {
+  const smtp = readConfig().smtp ?? {};
+  const accounts = Array.isArray(smtp.accounts) ? smtp.accounts.filter((a) => a?.host && a?.from) : [];
+  if (accounts.length === 0) {
+    return { ...smtp, accountIndex: 0 };
+  }
+  const stateFile = join(EXPORT_DIR, '.rotate');
+  let index = 0;
+  try {
+    index = Number(readFileSync(stateFile, 'utf8').trim()) || 0;
+  } catch {}
+  const account = accounts[index % accounts.length];
+  try {
+    mkdirSync(EXPORT_DIR, { recursive: true });
+    writeFileSync(stateFile, String((index + 1) % accounts.length), { mode: 0o600 });
+  } catch {}
+  return { ...smtp, ...account, accountIndex: index % accounts.length };
+}
+
 /** 发送邮件的唯一入口：抑制列表拦截 + dry_run 总闸 + 退订脚注 + 线程头 + 审计。 */
 async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId, actor = 'agent', inReplyTo, references, isFirstEmail }) {
-  const smtp = smtpOf();
+  const smtp = pickSmtpAccount();
   if (!smtp.host || !smtp.from) {
     throw new Error('SMTP 未配置（settings 页或 ~/.waimao/config.json 的 smtp 段）');
   }
@@ -484,31 +514,63 @@ function registerSequenceStartTool(ctx) {
   ctx.tools.register({
     name: 'email_sequence_start',
     description:
-      '给线索启动 Day 0/3/7/14 四步跟进序列（首封+轻提醒+附目录+最后跟进）。回复即停（状态改 replied 时自动停）。由 cron 定时执行，受 smtp.dry_run 约束。',
+      '给线索启动 Day 0/3/7/14 四步跟进序列（首封+轻提醒+附目录+最后跟进）。回复即停（状态改 replied 时自动停）。由 cron 定时执行，受 smtp.dry_run 约束。传 template_a/template_b 可做 A/B 测试（多线索时交替分配变体，stats_report 按变体统计回复率）。',
     parameters: {
       type: 'object',
-      properties: { lead_id: { type: 'string' }, language: { type: 'string', enum: ['en', 'es'] } },
-      required: ['lead_id'],
+      properties: {
+        lead_ids: { type: 'array', items: { type: 'string' }, description: '线索ID列表（批量启动用）' },
+        lead_id: { type: 'string', description: '单线索ID（与 lead_ids 二选一）' },
+        language: { type: 'string', enum: ['en', 'es', 'pt'] },
+        template_a: { type: 'string', description: 'A变体模板（id/name，可选）' },
+        template_b: { type: 'string', description: 'B变体模板（可选，与A成对）' },
+      },
     },
-    timeoutMs: 30_000,
-    isConcurrencySafe: () => true,
-    presentCall: (args) => ({ card: 'generic', title: `email_sequence_start: ${args?.lead_id ?? ''}`, kind: 'schedule', rawInput: args }),
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: 'email_sequence_start', kind: 'schedule', rawInput: args }),
     async execute(args) {
-      const lead = crmMod.getLead(String(args?.lead_id ?? ''));
-      if (!lead) {
-        throw new Error(`lead not found: ${args?.lead_id}`);
+      const ids = Array.isArray(args?.lead_ids) && args.lead_ids.length > 0 ? args.lead_ids : [args?.lead_id];
+      const abMode = Boolean(args?.template_a && args?.template_b);
+      const results = [];
+      let variantCounter = 0;
+      for (const id of ids.filter(Boolean)) {
+        try {
+          const lead = crmMod.getLead(String(id));
+          if (!lead) {
+            results.push({ id, error: 'not found' });
+            continue;
+          }
+          if (!lead.contacts.emails?.length) {
+            results.push({ id, error: 'no email' });
+            continue;
+          }
+          const language = args?.language ?? (String(lead.market).match(/^(mx|br|ar|cl|co|pe)$/) ? 'es' : 'en');
+          const variant = abMode ? (variantCounter % 2 === 0 ? 'A' : 'B') : null;
+          variantCounter += 1;
+          const templateId = variant === 'A' ? args.template_a : variant === 'B' ? args.template_b : null;
+          const template = templateId ? templatesMod.getTemplate(String(templateId)) : null;
+          const sequence = newSequence({ language });
+          let first;
+          if (template) {
+            templatesMod.markUsed(template.id);
+            first = { subject: template.subject, body: template.body, generatedBy: `template:${template.name}` };
+          } else {
+            first = await composeMod.composeEmail({ kind: 'first', company: lead.company || lead.domain, market: lead.market, language, useAI: args?.use_ai, me: readConfig().smtp?.fromName ?? 'Sales' });
+          }
+          sequence.steps[0].subject = first.subject;
+          sequence.steps[0].body = first.body;
+          sequence.variant = variant;
+          crmMod.updateLead(lead.id, { sequence }, { activityNote: `启动4步跟进序列${variant ? ` [变体${variant}]` : ''}` });
+          results.push({ id, variant, firstSubject: first.subject });
+        } catch (error) {
+          results.push({ id, error: String(error?.message ?? error).slice(0, 120) });
+        }
       }
-      if (!lead.contacts.emails?.length) {
-        throw new Error('该线索没有邮箱，无法启动邮件序列');
-      }
-      const language = args?.language ?? (String(lead.market).match(/^(mx|br|ar|cl|co|pe)$/) ? 'es' : 'en');
-      const sequence = newSequence({ language });
-      // 预生成首封
-      const first = await composeMod.composeEmail({ kind: 'first', company: lead.company || lead.domain, market: lead.market, language, useAI: true, me: readConfig().smtp?.fromName ?? 'Sales' });
-      sequence.steps[0].subject = first.subject;
-      sequence.steps[0].body = first.body;
-      crmMod.updateLead(lead.id, { sequence }, { activityNote: '启动4步跟进序列(Day0/3/7/14)' });
-      return { leadId: lead.id, language, plan: sequence.steps.map((step) => ({ day: step.day, label: step.label })), firstSubject: first.subject };
+      return {
+        started: results.filter((item) => !item.error).length,
+        abTest: abMode ? { a: args.template_a, b: args.template_b, note: 'stats_report 按变体统计回复率' } : null,
+        results,
+      };
     },
   });
 }
@@ -1124,8 +1186,192 @@ function registerAuditQueryTool(ctx) {
 }
 
 /* ------------------------------------------------------------------ */
-/* 工具：送达率 + 预热（v0.4）                                          */
+/* 工具：定价计算 / PI发票 / 蓝海选国 / 口播脚本 / 备份（v0.6）          */
 /* ------------------------------------------------------------------ */
+
+function registerPriceCalcTool(ctx) {
+  ctx.tools.register({
+    name: 'price_calc',
+    description:
+      '外贸定价计算器：按 Incoterms 2020 叠加成本算 EXW/FOB/CFR/CIF/DDP，可加利润率出报价，附单件价。mode=total 输入整批费用；mode=unit 输入单件成本（自动乘数量）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['total', 'unit'], description: '默认total' },
+        exw: { type: 'number', description: '出厂成本' },
+        inland: { type: 'number', description: '国内内陆运费' },
+        port: { type: 'number', description: '港口/报关费' },
+        ocean: { type: 'number', description: '海运费' },
+        insurance_rate: { type: 'number', description: '保险费率%（基于CFR），默认0' },
+        dest: { type: 'number', description: '目的港清关费(DDP用)' },
+        dest_freight: { type: 'number', description: '目的地运费(DDP用)' },
+        margin: { type: 'number', description: '利润率%（如25）' },
+        qty: { type: 'number', description: '数量（unit模式必填）' },
+      },
+      required: ['exw'],
+    },
+    timeoutMs: 10_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: `price_calc: EXW=${args?.exw} +${args?.margin ?? 0}%`, kind: 'calc', rawInput: args }),
+    async execute(args) {
+      const calc = calcPrice({
+        mode: args?.mode, exw: args?.exw, inland: args?.inland, port: args?.port,
+        ocean: args?.ocean, insuranceRate: args?.insurance_rate, dest: args?.dest,
+        destFreight: args?.dest_freight, margin: args?.margin, qty: args?.qty,
+      });
+      return { ...calc, quoteText: quoteLines(calc).join('\n') };
+    },
+  });
+}
+
+function registerProformaPdfTool(ctx) {
+  ctx.tools.register({
+    name: 'proforma_pdf',
+    description:
+      'PI 形式发票 PDF：比报价单正式——Incoterms 2020、HS 编码、原产国/目的国、银行收款信息、双方签章栏。客户开信用证/预付款/清关估价用。可配 wa_send_media 发送。',
+    parameters: {
+      type: 'object',
+      properties: {
+        lead_id: { type: 'string' },
+        items: { type: 'array', items: { type: 'object', properties: { desc: { type: 'string' }, hs_code: { type: 'string' }, qty: { type: 'number' }, unitPrice: { type: 'number' } }, required: ['desc', 'qty', 'unitPrice'] } },
+        currency: { type: 'string' },
+        incoterm: { type: 'string', description: 'FOB/CIF/EXW/DDP…默认FOB' },
+        payment: { type: 'string' },
+        lead_time: { type: 'string' },
+        origin: { type: 'string', description: '原产国，默认China' },
+        destination: { type: 'string' },
+        bank_name: { type: 'string' },
+        bank_account: { type: 'string' },
+        bank_swift: { type: 'string' },
+        bank_beneficiary: { type: 'string' },
+        notes: { type: 'string' },
+      },
+      required: ['items'],
+    },
+    timeoutMs: 30_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: `proforma_pdf: ${args?.items?.length ?? 0} items`, kind: 'export', rawInput: { lead_id: args?.lead_id, incoterm: args?.incoterm } }),
+    async execute(args) {
+      const lead = args?.lead_id ? crmMod.getLead(String(args.lead_id)) : null;
+      const piNo = `PI-${Date.now().toString(36).toUpperCase()}`;
+      const buffer = proformaPdf({
+        piNo,
+        from: { company: readConfig().smtp?.fromName ?? 'Our Company', email: readConfig().smtp?.from ?? '' },
+        to: { company: lead?.company ?? 'Valued Customer', country: lead?.market ?? '' },
+        items: (args?.items ?? []).map((item) => ({ ...item, hsCode: item.hs_code ?? item.hsCode })),
+        currency: args?.currency ?? 'USD',
+        incoterm: args?.incoterm,
+        payment: args?.payment,
+        leadTime: args?.lead_time,
+        origin: args?.origin,
+        destination: args?.destination,
+        bank: { name: args?.bank_name, account: args?.bank_account, swift: args?.bank_swift, beneficiary: args?.bank_beneficiary },
+        notes: args?.notes,
+      });
+      const file = join(EXPORT_DIR, `${piNo}.pdf`);
+      mkdirSync(EXPORT_DIR, { recursive: true });
+      writeFileSync(file, buffer);
+      if (lead) {
+        crmMod.addActivity(lead.id, { type: 'quote', note: `PI ${piNo} (${args?.incoterm ?? 'FOB'})` });
+        crmMod.updateLead(lead.id, { status: lead.status === 'replied' ? 'quoted' : lead.status });
+      }
+      auditMod.audit('quote.proforma', { piNo, file, leadId: args?.lead_id ?? null });
+      return { file, piNo, incoterm: args?.incoterm ?? 'FOB', total: (args?.items ?? []).reduce((sum, item) => sum + Number(item.qty ?? 0) * Number(item.unitPrice ?? 0), 0), currency: args?.currency ?? 'USD' };
+    },
+  });
+}
+
+function registerMarketScanTool(ctx) {
+  ctx.tools.register({
+    name: 'market_scan',
+    description:
+      '蓝海选国：同一产品在多个市场跑基础搜索，对比「结果量(竞争噪声) × 买家信号密度(需求)」→ 机会评分排名（🔵蓝海/🟡可试/🔴红海）。搜索侧启发，建议结合海关数据复核。',
+    parameters: {
+      type: 'object',
+      properties: {
+        product: { type: 'string', description: '英文产品词' },
+        markets: { type: 'array', items: { type: 'string' }, description: '市场key列表，默认 mx,us,br,de,ae,id' },
+        per_market: { type: 'number', description: '每市场搜索条数，默认8' },
+      },
+      required: ['product'],
+    },
+    timeoutMs: 600_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: `market_scan: ${args?.product ?? ''}`, kind: 'search', rawInput: args }),
+    async execute(args, exec) {
+      return scanMarkets({ product: args?.product, markets: args?.markets, perMarket: args?.per_market, signal: exec?.signal });
+    },
+  });
+}
+
+function registerVideoScriptTool(ctx) {
+  ctx.tools.register({
+    name: 'video_script',
+    description: '口播脚本生成器：TikTok/Reels/Shorts 短视频脚本（hook→痛点→产品→CTA，带分镜时间轴和标签），AI 生成、模板兜底。',
+    parameters: {
+      type: 'object',
+      properties: {
+        product: { type: 'string' },
+        audience: { type: 'string', description: '默认 importers & wholesalers' },
+        platform: { type: 'string', enum: ['tiktok', 'reels', 'shorts'] },
+        seconds: { type: 'number', description: '默认30' },
+        language: { type: 'string' },
+      },
+      required: ['product'],
+    },
+    timeoutMs: 90_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: `video_script: ${args?.product ?? ''}`, kind: 'create', rawInput: args }),
+    async execute(args) {
+      const script = await videoScript({
+        product: args?.product, audience: args?.audience, platform: args?.platform,
+        seconds: args?.seconds, language: args?.language,
+      });
+      return { ...script, rendered: renderScript(script) };
+    },
+  });
+}
+
+function registerDataBackupTool(ctx) {
+  ctx.tools.register({
+    name: 'data_backup',
+    description: '导出全部业务数据为单个 JSON 备份（CRM/线索runs/知识库/模板/审核消息/审计尾部），返回文件路径。',
+    parameters: { type: 'object', properties: {} },
+    timeoutMs: 60_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: 'data_backup', kind: 'export', rawInput: args }),
+    async execute() {
+      const read = (file) => {
+        try {
+          return JSON.parse(readFileSync(file, 'utf8'));
+        } catch {
+          return null;
+        }
+      };
+      const { homedir } = await import('node:os');
+      const home = homedir();
+      const bundle = {
+        exportedAt: new Date().toISOString(),
+        version: '0.6.0',
+        crm: read(join(home, '.waimao', 'data', 'crm.json')),
+        leads: read(join(home, '.waimao', 'data', 'leads.jsonl'))?.split?.('\n').filter(Boolean) ?? null,
+        kb: read(join(home, '.waimao', 'data', 'kb.json')),
+        templates: read(join(home, '.waimao', 'data', 'templates.json')),
+        messages: read(join(home, '.waimao', 'data', 'messages.json')),
+        suppress: read(join(home, '.waimao', 'data', 'suppress.json')),
+      };
+      const file = join(EXPORT_DIR, `backup-${new Date().toISOString().slice(0, 10)}.json`);
+      mkdirSync(EXPORT_DIR, { recursive: true });
+      writeFileSync(file, JSON.stringify(bundle, null, 1), { mode: 0o600 });
+      auditMod.audit('data.backup', { file });
+      let bytes = -1;
+      try {
+        bytes = statSync(file).size;
+      } catch {}
+      return { file, bytes };
+    },
+  });
+}
 
 function registerDeliverabilityCheckTool(ctx) {
   ctx.tools.register({
@@ -1666,6 +1912,21 @@ function registerRoutes(scope) {
   route('waimao-api-stats', 'exact', '/waimao/api/stats', (req, res) => {
     if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
     httpMod.sendJson(res, 200, statsMod.report());
+  });
+
+  // 定价计算（网页计算器实时调用）
+  route('waimao-calc-price', 'exact', '/waimao/api/calc/price', async (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    try {
+      const body = await httpMod.readBody(req);
+      httpMod.sendJson(res, 200, calcPrice({
+        mode: body.mode, exw: body.exw, inland: body.inland, port: body.port,
+        ocean: body.ocean, insuranceRate: body.insurance_rate, dest: body.dest,
+        destFreight: body.dest_freight, margin: body.margin, qty: body.qty,
+      }));
+    } catch (error) {
+      httpMod.sendJson(res, 400, { error: String(error?.message ?? error) });
+    }
   });
 
   // 审核台

@@ -1,0 +1,99 @@
+// v0.6 测试：定价计算、PI发票、蓝海选国(结构)、口播脚本(模板兜底)、退信分类、爬坡、A/B统计。
+import assert from 'node:assert';
+
+/* ---------- 定价计算器 ---------- */
+const { calcPrice, quoteLines } = await import('../dsh/pricing.js');
+const calc = calcPrice({ mode: 'total', exw: 10000, inland: 500, port: 300, ocean: 2000, insuranceRate: 1, dest: 800, destFreight: 400, margin: 20, qty: 1000 });
+assert.equal(calc.cost.EXW, 10000);
+assert.equal(calc.cost.FOB, 10800);
+assert.equal(calc.cost.CFR, 12800);
+assert.equal(calc.cost.insurance, 128);
+assert.equal(calc.cost.CIF, 12928);
+assert.equal(calc.cost.DDP, 14128);
+assert.equal(calc.quote.FOB, 12960); // 10800 * 1.2
+assert.equal(calc.quote.CIF, 15513.6);
+assert.equal(calc.perUnit.FOB, 12.96);
+const unitCalc = calcPrice({ mode: 'unit', exw: 5, inland: 0.2, port: 0.1, ocean: 1, qty: 1000, margin: 10 });
+assert.equal(unitCalc.cost.FOB, 5300); // 5.3 * 1000
+assert.equal(unitCalc.perUnit.FOB, 5.83); // 5.3*1.1
+const text = quoteLines(calc);
+assert.ok(text[1].includes('FOB') && text[1].includes('12.96'));
+
+/* ---------- PI 发票 ---------- */
+const { proformaPdf, quotePdf } = await import('../dsh/pdf.js');
+const pi = proformaPdf({
+  piNo: 'PI-TEST', items: [{ desc: 'Hair dryer 2000W', hsCode: '8516.31', qty: 1000, unitPrice: 8.5 }],
+  incoterm: 'CIF Shanghai', bank: { name: 'Bank of China', account: '888', swift: 'BKCHCNBJ' },
+  from: { company: 'ACME' }, to: { company: 'Buyer SA' },
+});
+const s = pi.toString('latin1');
+assert.ok(s.startsWith('%PDF-') && s.trimEnd().endsWith('%%EOF'));
+assert.ok(s.includes('PROFORMA INVOICE') && s.includes('8516.31') && s.includes('CIF Shanghai') && s.includes('Bank of China'));
+
+/* ---------- 蓝海选国（mock 引擎） ---------- */
+const realFetch = globalThis.fetch;
+const { writeFileSync, mkdirSync } = await import('node:fs');
+const cfgDir = `${process.env.USERPROFILE}\\.waimao`;
+mkdirSync(cfgDir, { recursive: true });
+const cfgFile = `${cfgDir}\\config.json`;
+let cfg = {};
+try { cfg = JSON.parse(readFileSync(cfgFile, 'utf8').replace(/^\uFEFF/, '')); } catch {}
+const { readFileSync } = await import('node:fs');
+// 清掉本地代理配置，让 mock fetch 生效
+cfg.serp = Object.assign({}, cfg.serp, { proxy: '', engine: 'ddg', chain: ['ddg'] });
+writeFileSync(cfgFile, JSON.stringify(cfg));
+globalThis.fetch = async (url, init) => {
+  const target = String(url);
+  if (target.includes('duckduckgo')) {
+    const q = decodeURIComponent(String(init?.body ?? ''));
+    const market = q.includes('+52') ? 'mx' : q.includes('+49') ? 'de' : 'other';
+    const html = market === 'mx'
+      ? `<a class="result__a" href="https://buyers-mx.com/a">We buy hair dryers WhatsApp</a><a class="result__snippet" href="#">looking for supplier</a><a class="result__a" href="https://www.alibaba.com/x">Alibaba</a>`
+      : `<a class="result__a" href="https://www.made-in-china.com/y">supplier</a>`;
+    return { ok: true, status: 200, headers: {}, text: async () => html };
+  }
+  throw new Error('unexpected fetch ' + target);
+};
+try {
+  const { scanMarkets } = await import('../dsh/market.js');
+  const scan = await scanMarkets({ product: 'hair dryer', markets: ['mx', 'de'], perMarket: 8 });
+  assert.equal(scan.ranking.length, 2);
+  assert.ok(scan.ranking[0].opportunity >= scan.ranking[1].opportunity, '按机会分排序');
+  const mx = scan.ranking.find((r) => r.market === 'mx');
+  assert.ok(mx.buyerSignals >= 1, '墨西哥应有买家信号');
+  assert.ok(mx.verdict.includes('蓝海') || mx.verdict.includes('可试'));
+} finally {
+  globalThis.fetch = realFetch;
+  delete cfg.serp.proxy;
+  writeFileSync(cfgFile, JSON.stringify(cfg));
+}
+
+/* ---------- 口播脚本（模板兜底，无 key） ---------- */
+const { videoScript, renderScript } = await import('../dsh/content.js');
+const script = await videoScript({ product: 'hair dryer', seconds: 30 });
+assert.equal(script.generatedBy, 'template');
+assert.ok(script.hook.text.includes('hair dryer'));
+assert.ok(script.scenes.length >= 3);
+const rendered = renderScript(script);
+assert.ok(rendered.includes('HOOK') && rendered.includes('CTA'));
+
+/* ---------- 退信分类 + 抑制 ---------- */
+const { classifyReply } = await import('../dsh/mail/replies.js');
+assert.equal(classifyReply('Mail Delivery System: This message was undeliverable').category, 'bounce');
+assert.equal(classifyReply('User unknown in virtual mailbox table').category, 'bounce');
+
+/* ---------- 爬坡 + A/B 统计结构 ---------- */
+const warmup = await import('../dsh/warmup.js');
+assert.equal(warmup.rampCap(20, 30), 15, '第20天=第3周=5+2*5');
+assert.equal(warmup.rampCap(21, 30), 20, '第21天=第4周=5+3*5');
+const stats = await import('../dsh/stats.js');
+const report = stats.report();
+assert.ok('abTest' in report);
+assert.ok(report.tracking !== undefined);
+
+/* ---------- 时区窗 ---------- */
+const { MARKETS } = await import('../dsh/markets.js');
+assert.equal(typeof MARKETS.mx.utc, 'number');
+assert.equal(MARKETS.de.utc, 1);
+
+console.log('ALL V0.6 MODULE TESTS PASSED');

@@ -22,20 +22,25 @@ const ctx = {
 };
 plugin.apply(ctx);
 
-// 43 tools + all routes
+// 48 tools + all routes
 assert.deepEqual(
   [...tools.keys()].sort(),
   [
     'audit_query', 'company_dossier', 'cron_status', 'crm_activity', 'crm_export', 'crm_list', 'crm_update',
+    'data_backup',
     'deliverability_check',
     'email_compose', 'email_find', 'email_scan_replies', 'email_send', 'email_sequence_start', 'email_sequence_status', 'email_suppress', 'email_verify',
     'kb_list', 'kb_search', 'kb_upsert',
     'lead_enrich', 'lead_export_csv', 'lead_score', 'lead_search',
+    'market_scan',
     'monitor_check', 'monitor_watch',
+    'price_calc',
+    'proforma_pdf',
     'quote_pdf',
     'sop_approve', 'sop_create', 'sop_next', 'sop_review', 'sop_status',
     'stats_report',
     'template_delete', 'template_list', 'template_save',
+    'video_script',
     'wa_broadcast', 'wa_reply', 'wa_review_queue', 'wa_send_media', 'wa_send_text', 'wa_sync',
     'warmup_status',
   ].sort(),
@@ -65,6 +70,7 @@ for (const path of [
   '/waimao/api/crm/bulk',
   '/waimao/api/crm/import',
   '/waimao/api/stats',
+  '/waimao/api/calc/price',
   '/waimao/api/review/queue',
   '/waimao/api/review/draft',
   '/waimao/api/review/send',

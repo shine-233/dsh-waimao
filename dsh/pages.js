@@ -483,6 +483,7 @@ function crmPage() {
     `<button class="mini ghost" id="vList" style="border:none;background:transparent">列表</button></div>` +
     `<button class="ghost mini" onclick="window.open('api/crm/export.csv','_blank')">⬇ CSV</button>` +
     `<button class="ghost mini" onclick="window.open('api/crm/vcard','_blank')">📇 vCard</button>` +
+    `<button class="ghost mini" onclick="openCalc()">🧮 定价计算器</button>` +
     `<label class="ghost mini clickable" style="padding:4px 11px;font-size:12px;border-radius:7px;border:1px solid var(--border);display:inline-block">📥 导入 <input type="file" accept=".csv,.json" id="importFile" style="display:none" onchange="importFile(this)"></label>` +
     `</div>` +
     `<div id="bulkBar" class="flex mb" style="display:none;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.35);border-radius:10px;padding:9px 14px">` +
@@ -601,8 +602,7 @@ function crmPage() {
     `api('api/crm/import',{method:'POST',body:JSON.stringify({rows:rows})})` +
     `.then(function(r){if(!r.ok){toast(r.j.error,'err');return;}toast('导入完成：新增 '+r.j.imported+'，合并 '+r.j.merged);load();});` +
     `}catch(e){toast('解析失败：'+e.message,'err');}};reader.readAsText(file,'utf-8');input.value='';}` +
-    `function openDrawer(id){var l=allLeads.find(function(x){return x.id===id});if(!l)return;` +
-    `document.getElementById('dTitle').textContent=l.company||l.domain;` +
+    `function openDrawer(id){var l=allLeads.find(function(x){return x.id===id});if(!l)return;` +    `document.getElementById('dTitle').textContent=l.company||l.domain;` +
     `var ct=[].concat(l.contacts.emails||[]).concat((l.contacts.whatsapps||[]).map(function(w){return '💬 +'+w})).concat(l.contacts.phones||[]);` +
     `var acts=(l.activities||[]).slice(-8).reverse();` +
     `document.getElementById('dBody').innerHTML=` +
@@ -617,6 +617,25 @@ function crmPage() {
     `acts.map(function(a){return '<div style="padding:7px 0;border-bottom:1px solid rgba(39,39,42,.6);font-size:12.5px"><span class="dim mono">'+a.ts.slice(5,16)+'</span> '+esc(a.note)+'</div>'}).join('') || '<span class="dim">无</span>';` +
     `document.getElementById('drawer').classList.add('show');}` +
     `function closeDrawer(){document.getElementById('drawer').classList.remove('show');}` +
+    `/* ---- 定价计算器（实时联动） ---- */` +
+    `function openCalc(){` +
+    `modal('<h3 style="margin:0 0 14px">🧮 定价计算器 <span class="dim" style="font-size:12px;font-weight:400">Incoterms 2020 叠加</span></h3>' +` +
+    `'<div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">' +` +
+    `['exw|出厂成本','inland|国内运费','port|港口/报关费','ocean|海运费','insurance_rate|保险率%','dest|目的港清关费','dest_freight|目的地运费','margin|利润率%'].map(function(f){` +
+    `var p=f.split('|');return '<div class="field"><label>'+p[1]+'</label><input type="number" id="pc-'+p[0]+'" value="0" oninput="calcLive()"></div>'}).join('') +` +
+    `'<div class="field"><label>口径</label><select id="pc-mode" onchange="calcLive()"><option value="total">整批金额</option><option value="unit">单件成本</option></select></div>' +` +
+    `'<div class="field"><label>数量</label><input type="number" id="pc-qty" value="1000" oninput="calcLive()"></div></div>' +` +
+    `'<div id="pcOut" class="mt"></div>',` +
+    `function(box){calcLive();});}` +
+    `function calcLive(){var g=function(k){return Number((document.getElementById('pc-'+k)||{}).value)||0};` +
+    `var body={mode:document.getElementById('pc-mode').value,qty:g('qty'),exw:g('exw'),inland:g('inland'),port:g('port'),ocean:g('ocean'),insurance_rate:g('insurance_rate'),dest:g('dest'),dest_freight:g('dest_freight'),margin:g('margin')};` +
+    `api('api/calc/price',{method:'POST',body:JSON.stringify(body)})` +
+    `.then(function(r){if(!r.ok)return;var c=r.j;` +
+    `document.getElementById('pcOut').innerHTML=` +
+    `'<table><tr><th></th><th>成本</th><th>报价(+'+esc(c.margin)+')</th></tr>' +` +
+    `['EXW','FOB','CFR','CIF','DDP'].map(function(k){return '<tr><td><b>'+k+'</b></td><td class="mono">'+c.cost[k].toLocaleString()+'</td><td class="mono" style="color:#a5b4fc;font-weight:700">'+c.quote[k].toLocaleString()+'</td></tr>'}).join('')+'</table>' +` +
+    `'<div class="muted mt" style="font-size:12px">单件：FOB ≈ '+c.perUnit.FOB+' · CIF ≈ '+c.perUnit.CIF+'</div>';` +
+    `});}` +
     `load();` +
     `</script>` +
     FOOTER

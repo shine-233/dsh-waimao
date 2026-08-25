@@ -51,8 +51,23 @@ export function report() {
   const emailDryRun = queryAudit({ action: 'email.dry_run', limit: 1000 }).length;
   const waSent = queryAudit({ action: 'wa.send', limit: 1000 }).length;
 
-  // 序列进行中
+  // 序列进行中 + A/B 变体对比
   const sequencesRunning = leads.filter((lead) => lead.sequence && lead.sequence.steps?.some((step) => step.status === 'pending')).length;
+  const abTest = {};
+  for (const lead of leads) {
+    if (lead.sequence?.variant && ['contacted', 'replied', 'quoted'].includes(lead.status)) {
+      const variant = lead.sequence.variant;
+      abTest[variant] = abTest[variant] || { contacted: 0, replied: 0 };
+      abTest[variant].contacted += 1;
+      if (['replied', 'quoted', 'won'].includes(lead.status)) {
+        abTest[variant].replied += 1;
+      }
+    }
+  }
+  for (const variant of Object.keys(abTest)) {
+    const item = abTest[variant];
+    item.replyRate = item.contacted > 0 ? `${Math.round((item.replied / item.contacted) * 100)}%` : '-';
+  }
 
   return {
     generatedAt: new Date().toISOString(),
@@ -67,6 +82,7 @@ export function report() {
     byTier,
     byMarket,
     replyCategories,
+    abTest,
     outreach: { emailSent, emailDryRun, waSent, sequencesRunning },
     tracking: trackStats(),
     suppressed: suppressStats().total,
