@@ -22,7 +22,7 @@ const ctx = {
 };
 plugin.apply(ctx);
 
-// 40 tools + all routes
+// 43 tools + all routes
 assert.deepEqual(
   [...tools.keys()].sort(),
   [
@@ -35,6 +35,7 @@ assert.deepEqual(
     'quote_pdf',
     'sop_approve', 'sop_create', 'sop_next', 'sop_review', 'sop_status',
     'stats_report',
+    'template_delete', 'template_list', 'template_save',
     'wa_broadcast', 'wa_reply', 'wa_review_queue', 'wa_send_media', 'wa_send_text', 'wa_sync',
     'warmup_status',
   ].sort(),
@@ -60,6 +61,10 @@ for (const path of [
   '/waimao/api/crm/send-email',
   '/waimao/api/crm/sequence-start',
   '/waimao/api/crm/export.csv',
+  '/waimao/api/crm/vcard',
+  '/waimao/api/crm/bulk',
+  '/waimao/api/crm/import',
+  '/waimao/api/stats',
   '/waimao/api/review/queue',
   '/waimao/api/review/draft',
   '/waimao/api/review/send',

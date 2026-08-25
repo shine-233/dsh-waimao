@@ -39,6 +39,8 @@ import * as suppressMod from './suppress.js';
 import * as trackMod from './track.js';
 import * as warmupMod from './warmup.js';
 import { deliverabilityCheck } from './deliverability.js';
+import * as templatesMod from './templates.js';
+import { toVcf, toVCard } from './csv.js';
 
 export const name = 'waimao';
 
@@ -87,6 +89,7 @@ export function apply(ctx) {
   registerAuditQueryTool(ctx);
   registerWarmupStatusTool(ctx);
   registerDeliverabilityCheckTool(ctx);
+  registerTemplateTools(ctx);
 
   if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (scope) => {
@@ -369,11 +372,12 @@ function registerEmailComposeTool(ctx) {
       type: 'object',
       properties: {
         lead_id: { type: 'string', description: 'CRM 线索ID' },
-        language: { type: 'string', enum: ['en', 'es'], description: '缺省按市场自动选' },
+        language: { type: 'string', enum: ['en', 'es', 'pt'], description: '缺省按市场自动选' },
         use_ai: { type: 'boolean', description: '默认true' },
         kind: { type: 'string', enum: ['first', 'followup'], description: '首封/跟进，默认first' },
         step: { type: 'number', description: '跟进序号1-3（kind=followup时）' },
         task_id: { type: 'string', description: 'SOP任务ID（可选，挂草稿到任务）' },
+        template: { type: 'string', description: '模板库 id 或 name（提供则跳过AI直接用模板）' },
       },
       required: ['lead_id'],
     },
@@ -386,19 +390,26 @@ function registerEmailComposeTool(ctx) {
         throw new Error(`lead not found: ${args?.lead_id}`);
       }
       const kbContext = kbMod.contextFor(`${lead.market} ${lead.company} ${lead.domain} 报价 政策 产品`);
-      const draft = await composeMod.composeEmail({
-        kind: args?.kind ?? 'first',
-        step: args?.step,
-        name: lead.contacts?.contactName ?? '',
-        company: lead.company || lead.domain,
-        product: '',
-        market: lead.market,
-        language: args?.language,
-        useAI: args?.use_ai,
-        me: readConfig().smtp?.fromName ?? 'Sales',
-        features: 'factory direct, stable quality, fast lead time',
-        knowledge: kbContext || undefined,
-      });
+      let draft;
+      const template = args?.template ? templatesMod.getTemplate(String(args.template)) : null;
+      if (template) {
+        templatesMod.markUsed(template.id);
+        draft = { language: template.language, subject: template.subject, body: template.body, generatedBy: `template:${template.name}` };
+      } else {
+        draft = await composeMod.composeEmail({
+          kind: args?.kind ?? 'first',
+          step: args?.step,
+          name: lead.contacts?.contactName ?? '',
+          company: lead.company || lead.domain,
+          product: '',
+          market: lead.market,
+          language: args?.language,
+          useAI: args?.use_ai,
+          me: readConfig().smtp?.fromName ?? 'Sales',
+          features: 'factory direct, stable quality, fast lead time',
+          knowledge: kbContext || undefined,
+        });
+      }
       const result = { leadId: lead.id, ...draft, knowledgeCited: kbContext ? kbContext.split('\n').length : 0 };
       if (args?.task_id) {
         const attached = sopMod.attachDraft(args.task_id, {
@@ -1141,6 +1152,54 @@ function registerDeliverabilityCheckTool(ctx) {
   });
 }
 
+function registerTemplateTools(ctx) {
+  ctx.tools.register({
+    name: 'template_save',
+    description: '保存/更新邮件模板到模板库（name 唯一，同名覆盖）。之后 email_compose 可配 template_id/name 复用。',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        language: { type: 'string', enum: ['en', 'es', 'pt'] },
+        subject: { type: 'string' },
+        body: { type: 'string' },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['name', 'subject', 'body'],
+    },
+    timeoutMs: 10_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: `template_save: ${args?.name ?? ''}`, kind: 'update', rawInput: args }),
+    async execute(args) {
+      const template = templatesMod.saveTemplate(args);
+      return { id: template.id, name: template.name, language: template.language };
+    },
+  });
+  ctx.tools.register({
+    name: 'template_list',
+    description: '列出模板库（可按语言过滤）。',
+    parameters: { type: 'object', properties: { language: { type: 'string' } } },
+    timeoutMs: 10_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: 'template_list', kind: 'list', rawInput: args }),
+    async execute(args) {
+      return templatesMod.listTemplates({ language: args?.language });
+    },
+  });
+  ctx.tools.register({
+    name: 'template_delete',
+    description: '删除模板。',
+    parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    timeoutMs: 10_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: `template_delete: ${args?.id ?? ''}`, kind: 'delete', rawInput: args }),
+    async execute(args) {
+      const removed = templatesMod.removeTemplate(String(args?.id ?? ''), 'user');
+      return { deleted: removed.name };
+    },
+  });
+}
+
 function registerWarmupStatusTool(ctx) {
   ctx.tools.register({
     name: 'warmup_status',
@@ -1566,6 +1625,47 @@ function registerRoutes(scope) {
     const leads = crmMod.listLeads({ status: url.searchParams.get('status') ?? undefined, limit: 2000 });
     res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="crm-export.csv"` });
     res.end(toCsv(CRM_CSV_HEADERS, leads.map(crmRow)));
+  });
+
+  // vCard 导出（单条 ?id= 或全部）
+  route('waimao-crm-vcard', 'exact', '/waimao/api/crm/vcard', (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    const url = new URL(req.url, 'http://localhost');
+    const id = url.searchParams.get('id');
+    const leads = id ? [crmMod.getLead(String(id))].filter(Boolean) : crmMod.listLeads({ limit: 2000 });
+    if (leads.length === 0) { httpMod.sendJson(res, 404, { error: 'no leads' }); return; }
+    res.writeHead(200, { 'content-type': 'text/vcard; charset=utf-8', 'content-disposition': `attachment; filename="waimao-leads.vcf"` });
+    res.end(toVcf(leads));
+  });
+
+  // 批量操作
+  route('waimao-crm-bulk', 'exact', '/waimao/api/crm/bulk', async (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    try {
+      const body = await httpMod.readBody(req);
+      const results = crmMod.bulkUpdate({ ids: body.ids, action: body.action, value: body.value }, { actor: 'user' });
+      httpMod.sendJson(res, 200, { results });
+    } catch (error) {
+      httpMod.sendJson(res, 400, { error: String(error?.message ?? error) });
+    }
+  });
+
+  // 线索导入（JSON 行数组，自动去重合并）
+  route('waimao-crm-import', 'exact', '/waimao/api/crm/import', async (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    try {
+      const body = await httpMod.readBody(req);
+      const result = crmMod.importLeads(body.rows ?? []);
+      httpMod.sendJson(res, 200, result);
+    } catch (error) {
+      httpMod.sendJson(res, 400, { error: String(error?.message ?? error) });
+    }
+  });
+
+  // 统计（仪表盘图表用）
+  route('waimao-api-stats', 'exact', '/waimao/api/stats', (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    httpMod.sendJson(res, 200, statsMod.report());
   });
 
   // 审核台

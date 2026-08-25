@@ -223,6 +223,99 @@ export function crmStats() {
   return { total: leads.length, byStatus, byTier };
 }
 
+/** 批量操作：状态/标签/删除。返回逐条结果。 */
+export function bulkUpdate({ ids, action, value }, { actor = 'user' } = {}) {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw new Error('bulk needs ids');
+  }
+  if (ids.length > 500) {
+    throw new Error('bulk limited to 500 per call');
+  }
+  const results = [];
+  for (const id of ids) {
+    try {
+      if (action === 'status') {
+        const lead = updateLead(id, { status: value }, { actor, activityNote: `批量改状态 → ${STATUS_LABELS[value] ?? value}` });
+        results.push({ id, ok: true, status: lead.status });
+      } else if (action === 'tag') {
+        const lead = getLead(id);
+        if (!lead) {
+          throw new Error('not found');
+        }
+        const tags = [...new Set([...(lead.tags ?? []), String(value ?? '')].filter(Boolean))];
+        updateLead(id, { tags }, { actor, activityNote: `批量加标签: ${value}` });
+        results.push({ id, ok: true, tags });
+      } else if (action === 'sequence-stop') {
+        const lead = getLead(id);
+        if (lead?.sequence) {
+          updateLead(id, { sequence: stopSequenceLocal(lead.sequence, 'bulk stop') }, { actor, activityNote: '批量停止序列' });
+        }
+        results.push({ id, ok: true });
+      } else if (action === 'watch') {
+        results.push({ id, ok: true, delegated: 'monitor' }); // 由 index.js 转给 monitor.watch
+      } else {
+        throw new Error(`unknown bulk action: ${action}`);
+      }
+    } catch (error) {
+      results.push({ id, ok: false, error: String(error?.message ?? error).slice(0, 120) });
+    }
+  }
+  audit('crm.bulk', { action, count: ids.length, ok: results.filter((item) => item.ok).length }, actor);
+  return results;
+}
+
+function stopSequenceLocal(sequence, reason) {
+  for (const step of sequence?.steps ?? []) {
+    if (step.status === 'pending') {
+      step.status = 'skipped';
+      step.error = reason;
+    }
+  }
+  return sequence;
+}
+
+/** 导入线索（CSV 解析后的行或 JSON），自动去重合并。 */
+export function importLeads(rows, { actor = 'user' } = {}) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error('import needs rows');
+  }
+  if (rows.length > 2000) {
+    throw new Error('import limited to 2000 rows per call');
+  }
+  const results = { imported: 0, merged: 0, skipped: 0, errors: [] };
+  for (const row of rows) {
+    try {
+      const emails = String(row.email ?? row.emails ?? '').split(/[\s;,]+/).filter((item) => item.includes('@'));
+      const whatsapps = String(row.whatsapp ?? row.whatsapps ?? row.phone ?? '').split(/[\s;,]+/).map((item) => item.replace(/\D/g, '')).filter((item) => item.length >= 8);
+      const company = String(row.company ?? row['公司'] ?? '').trim();
+      const url = String(row.url ?? row.domain ?? row['链接'] ?? '').trim();
+      if (!company && !url && emails.length === 0 && whatsapps.length === 0) {
+        results.skipped += 1;
+        continue;
+      }
+      const { lead, merged } = upsertLead({
+        company,
+        url,
+        market: String(row.market ?? row['市场'] ?? '').trim(),
+        source: `import:${String(row.source ?? 'csv').slice(0, 40)}`,
+        contacts: { emails, whatsapps, phones: [], socials: {} },
+        score: Number(row.score ?? row['评分'] ?? 0) || 0,
+        tier: String(row.tier ?? row['分层'] ?? '').trim() || undefined,
+        title: String(row.title ?? '').slice(0, 120),
+        snippet: String(row.snippet ?? row['摘要'] ?? '').slice(0, 300),
+      }, { actor, merge: true });
+      if (merged) {
+        results.merged += 1;
+      } else {
+        results.imported += 1;
+      }
+    } catch (error) {
+      results.errors.push(String(error?.message ?? error).slice(0, 100));
+    }
+  }
+  return results;
+}
+
 export function storeFile() {
   return FILE;
 }

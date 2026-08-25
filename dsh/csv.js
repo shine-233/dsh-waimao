@@ -37,3 +37,34 @@ export function crmRow(lead) {
     创建时间: lead.createdAt,
   };
 }
+
+/** RFC6350 vCard（手机通讯录可直接导入，WhatsApp 加联系人神器）。 */
+export function toVCard(lead) {
+  const name = (lead.company || lead.domain || 'Unknown').replace(/[;,\\]/g, ' ');
+  const lines = ['BEGIN:VCARD', 'VERSION:3.0', `FN:${name}`, `ORG:${name}`];
+  if (lead.market) {
+    lines.push(`NOTE:[waimao] ${lead.market} ${lead.tier ?? ''} ${lead.score ?? ''}分`);
+  }
+  for (const email of (lead.contacts?.emails ?? []).slice(0, 3)) {
+    lines.push(`EMAIL;TYPE=WORK:${email}`);
+  }
+  for (const wa of (lead.contacts?.whatsapps ?? []).slice(0, 2)) {
+    lines.push(`TEL;TYPE=CELL:+${wa.replace(/\D/g, '')}`);
+  }
+  for (const phone of (lead.contacts?.phones ?? []).slice(0, 2)) {
+    lines.push(`TEL;TYPE=WORK:+${phone.replace(/\D/g, '')}`);
+  }
+  const linkedin = lead.contacts?.socials?.linkedin?.[0];
+  if (linkedin) {
+    lines.push(`URL:${linkedin}`);
+  }
+  if (lead.url) {
+    lines.push(`URL:${lead.url}`);
+  }
+  lines.push('END:VCARD');
+  return lines.join('\r\n');
+}
+
+export function toVcf(leads) {
+  return `${leads.map(toVCard).join('\r\n')}\r\n`;
+}
