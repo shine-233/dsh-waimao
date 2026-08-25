@@ -1,0 +1,48 @@
+{
+  "name": "dsh-waimao",
+  "version": "0.1.0",
+  "description": "外贸获客插件 for DeepSeek Harness (dsh)：谷歌三层搜索获客（WhatsApp/LinkedIn 买家线索）+ WhatsApp 客服审核台（Evolution API 收发 + AI 草稿 + 人工审核）。Foreign-trade lead gen & WhatsApp review desk as one dsh plugin.",
+  "type": "module",
+  "scripts": {
+    "test": "node test/smoke.mjs && node test/ddg-fixture.mjs && node test/host-sim.mjs"
+  },
+  "exports": {
+    ".": "./dsh/index.js",
+    "./dsh": "./dsh/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dsh",
+    "skills",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "cordis",
+    "foreign-trade",
+    "lead-generation",
+    "whatsapp",
+    "evolution-api",
+    "google-serp"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# dsh bundle layer: mount the dsh-waimao plugin (dsh/index.js via the package
+# root export). No seam is repointed: the plugin only ADDS tools and loopback
+# web routes, it never replaces a built-in capability.
+- insert:
+    - id: waimao
+      name: 'dsh-waimao'
