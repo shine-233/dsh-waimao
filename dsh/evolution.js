@@ -1,6 +1,10 @@
 // Evolution API 客户端（自托管 WhatsApp 网关）。只依赖 global fetch。
 // 兼容 v2 的常见路径；webhook 载荷同时兼容 v1.8/v2 的两种形状。
 import { readConfig } from './config.js';
+import { audit } from './audit.js';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { DATA_DIR } from './config.js';
 
 function requireEvo(config) {
   const { baseURL, apiKey, instance } = config.evolution;
@@ -56,6 +60,106 @@ export async function sendText(number, text, signal) {
     body: { number: digits, text: String(text) },
     signal,
   });
+}
+
+/**
+ * 发送媒体（图片/PDF/文档）。media 传 http(s) URL 或 base64（不带 data: 前缀）。
+ * mediatype: image | document | video | audio
+ */
+export async function sendMedia(number, { media, mediatype = 'document', filename = 'file', caption = '' }, signal) {
+  const digits = String(number ?? '').replace(/[^\d]/g, '');
+  if (digits.length < 8) {
+    throw new Error(`invalid phone number: ${number}`);
+  }
+  const isUrl = /^https?:\/\//i.test(String(media));
+  const body = isUrl
+    ? { number: digits, mediatype, media: String(media), caption: String(caption ?? '') }
+    : {
+        number: digits,
+        mediatype,
+        caption: String(caption ?? ''),
+        mediaMessage: { base64: String(media).replace(/^data:[^;]+;base64,/, ''), filename: String(filename) },
+      };
+  return evoFetch('/message/sendMedia/{instance}', { method: 'POST', body, signal });
+}
+
+/* ------------------------------------------------------------------ */
+/* 群发频控：每日上限 + 随机间隔 + 失败熔断。状态存 data/broadcast.json  */
+/* ------------------------------------------------------------------ */
+
+const BROADCAST_STATE = join(DATA_DIR, 'broadcast.json');
+
+function loadBroadcastState() {
+  try {
+    const parsed = JSON.parse(readFileSync(BROADCAST_STATE, 'utf8'));
+    return parsed?.date === new Date().toISOString().slice(0, 10) ? parsed : { date: new Date().toISOString().slice(0, 10), sentToday: 0 };
+  } catch {
+    return { date: new Date().toISOString().slice(0, 10), sentToday: 0 };
+  }
+}
+
+function saveBroadcastState(state) {
+  mkdirSync(dirname(BROADCAST_STATE), { recursive: true, mode: 0o700 });
+  const tmp = `${BROADCAST_STATE}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state, null, 1), { mode: 0o600 });
+  renameSync(tmp, BROADCAST_STATE);
+}
+
+export function broadcastBudget() {
+  const config = readConfig();
+  const state = loadBroadcastState();
+  const cap = config.wa?.dailyBroadcastCap ?? 200;
+  return { sentToday: state.sentToday, cap, remaining: Math.max(0, cap - state.sentToday) };
+}
+
+/**
+ * 受控群发。targets: [{number, text, media?}]。
+ * 每条之间随机延迟 [minDelaySec, maxDelaySec]；超每日上限即停；连续 3 次
+ * 发送失败即熔断（大概率被风控，继续会加重）。
+ * onProgress(sent, total, lastResult) 回调供工具层上报。
+ */
+export async function broadcast(targets, { onProgress, signal } = {}) {
+  const config = readConfig();
+  const cap = config.wa?.dailyBroadcastCap ?? 200;
+  const minDelay = (config.wa?.minDelaySec ?? 20) * 1000;
+  const maxDelay = (config.wa?.maxDelaySec ?? 90) * 1000;
+  const state = loadBroadcastState();
+  const results = [];
+  let consecutiveFailures = 0;
+  for (const target of targets) {
+    if (state.sentToday >= cap) {
+      results.push({ number: target.number, skipped: `daily cap ${cap} reached` });
+      break;
+    }
+    if (signal?.aborted) {
+      results.push({ number: target.number, skipped: 'aborted' });
+      break;
+    }
+    try {
+      const result = target.media
+        ? await sendMedia(target.number, target.media)
+        : await sendText(target.number, target.text);
+      state.sentToday += 1;
+      saveBroadcastState(state);
+      consecutiveFailures = 0;
+      results.push({ number: target.number, ok: true });
+      audit('wa.broadcast.send', { number: target.number }, 'agent');
+    } catch (error) {
+      consecutiveFailures += 1;
+      results.push({ number: target.number, ok: false, error: String(error?.message ?? error).slice(0, 150) });
+      audit('wa.broadcast.fail', { number: target.number, error: String(error?.message ?? error).slice(0, 150) }, 'agent');
+      if (consecutiveFailures >= 3) {
+        results.push({ aborted: '3 consecutive failures — circuit breaker, stop broadcasting' });
+        break;
+      }
+    }
+    onProgress?.(results.filter((item) => item.ok).length, targets.length, results.at(-1));
+    if (minDelay > 0) {
+      const delay = minDelay + Math.floor(Math.random() * Math.max(1, maxDelay - minDelay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  return { results, sentToday: loadBroadcastState().sentToday, cap };
 }
 
 /** 最近会话列表。v2 同时接受 GET/POST，这里 GET 失败回退 POST。 */

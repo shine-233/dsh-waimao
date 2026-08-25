@@ -28,6 +28,9 @@ export const DEFAULT_CONFIG = {
     // 大陆网络必填：本地代理地址（Clash 默认 http://127.0.0.1:7890）。
     // 留空则依次尝试环境变量 HTTPS_PROXY/HTTP_PROXY，再不行就直连。
     proxy: '',
+    // 引擎 failover 链：首选失败（限流/被RST）自动切下一个，带 10 分钟冷却。
+    chain: ['ddg', 'serpapi'],
+    cooldownMin: 10,
   },
   evolution: {
     baseURL: 'http://127.0.0.1:8080',
@@ -39,8 +42,32 @@ export const DEFAULT_CONFIG = {
     apiKey: '',
     model: 'deepseek-chat',
   },
-  // Shared secret the Evolution webhook must present (?token=... or
-  // x-webhook-token). Empty means the webhook route refuses everything.
+  smtp: {
+    host: '', // 如 smtp.gmail.com / smtp.qiye.aliyun.com
+    port: 465, // 465=隐式TLS, 587=STARTTLS
+    secure: true,
+    user: '',
+    pass: '',
+    from: '', // 发件人邮箱
+    fromName: 'Sales',
+    // 总闸：true 时一切邮件发送只走预览不真实发送。确认配置无误后改 false。
+    dryRun: true,
+    replyTo: '',
+  },
+  cron: {
+    enabled: true,
+    waSyncEveryMin: 30, // WhatsApp 收件箱轮询周期（0=关闭）
+    sequenceCheckEveryMin: 60, // 邮件序列到期检查周期
+    dailyReportAt: '09:00', // 每日管线日报时间（本机时区）
+    staleDays: 7, // 多少天没动作算停跟进
+  },
+  wa: {
+    dailyBroadcastCap: 200, // 群发每日上限（防封号，宁低勿高）
+    minDelaySec: 20, // 群发两条之间的最小间隔
+    maxDelaySec: 90, // 最大间隔（随机化更安全）
+  },
+  // 共享密钥，Evolution webhook 必须携带（?token=... 或 x-webhook-token）。
+  // 留空 = webhook 拒收一切。
   webhookToken: '',
 };
 
@@ -139,6 +166,7 @@ export function configSummary() {
       hasSerpapiKey: hasKey(config.serp.serpapiKey),
       perLayer: config.serp.perLayer,
       proxy: resolveProxyForSummary(config),
+      chain: config.serp.chain ?? ['ddg'],
     },
     evolution: {
       baseURL: config.evolution.baseURL,
@@ -150,6 +178,15 @@ export function configSummary() {
       model: config.deepseek.model,
       ready: hasKey(config.deepseek.apiKey),
     },
+    smtp: {
+      host: config.smtp.host,
+      port: config.smtp.port,
+      from: config.smtp.from,
+      ready: hasKey(config.smtp.host) && hasKey(config.smtp.from),
+      dryRun: config.smtp.dryRun !== false,
+    },
+    cron: config.cron ?? {},
+    wa: config.wa ?? {},
     webhookTokenSet: hasKey(config.webhookToken),
   };
 }

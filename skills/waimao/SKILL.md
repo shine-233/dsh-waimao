@@ -1,29 +1,42 @@
 ---
 name: waimao
-description: 外贸获客与 WhatsApp 客服方法论：何时用 lead_search 三层搜索、如何选市场与层级、如何用 wa_* 工具做"AI起草+人工审核"的客服流程。
+description: 外贸获客全家桶方法论：三层搜索→线索加工(提取/过滤/评分)→邮箱验证→开发信→跟进序列→CRM→SOP阶段机(人工审批)→知识库→定时任务→WhatsApp。何时用哪个工具、标准作业流程。
 ---
 
-# 外贸获客（waimao）
+# 外贸获客（waimao v0.2）
 
-## 谷歌三层获客公式
+## 标准获客流程（SOP）
 
-用户说"帮我找 XX 产品 + 某市场的买家"时，调用 `lead_search`：
+用户说"帮我找 XX 产品 + 某市场买家"时，推荐走完整 SOP（sop_create 创建任务，sop_next 逐步推进，服务端强制顺序）：
 
-- product 必须是**英文**产品词（中文先翻译）。
-- 市场：亚非拉（墨西哥+52、迪拜+971、沙特+966、巴西+55、印尼+62…）走 WhatsApp 公式；欧美走邮件+LinkedIn。
-- 默认三层全跑 `[1,2,3]`；用户要"快"就 `[1,3]`；要"找对人"就加第 2 层（LinkedIn 职位：Purchasing/Import/Sourcing Manager）。
-- 结果已逐层去重；汇报时按层分组，并提醒：第 2 层是"拿到公司再定位到人"，第 3 层是"明确想买的人"，比 wholesale 词精准得多。
-- 需要表格交付时调用 `lead_export_csv`，把返回的文件路径给用户。
+1. **discover**：`lead_search`（英文产品词；亚非拉走 WhatsApp 公式，欧美加 LinkedIn 层；`source:maps` 可搜地图商家，需 serpapi key）
+2. **enrich**：`lead_enrich`（抓页提取邮箱/WA/电话 + 规则过滤同行/B2B平台/黄页 + 自动入 CRM）
+3. **score**：`lead_score`（规则+AI 0-12 分：🔴极高10-12 / 🟠高7-9 / 🟡中4-6 / 🟢低1-3）
+4. **draft**：对 🔴🟠 线索 `email_compose(task_id=...)` 生成开发信草稿（拉美自动西语；引用 kb_search 的 citation）
+5. **approval**：`sop_review` 列草稿 → **必须人工 sop_approve**（哈希绑定，草稿改动需重批，fail-closed）
+6. **outreach**：`email_send`（受 smtp.dry_run 总闸）或 `wa_send_text`；可 `email_sequence_start` 启动 Day0/3/7/14 序列
+7. **close**：`sop_next` 自动出结案报告
 
-## WhatsApp 客服流程（AI 起草 + 人工审核）
+## 关键规则
 
-1. `wa_sync`：拉取最近会话，买家消息进入待审队列（webhook 不可达时的兜底）。
-2. `wa_review_queue`：看待审消息。
-3. **草稿**：由你（智能体）根据聊天上下文直接起草英文回复——简短、礼貌、推动成交；不编造价格货期，报价先问数量规格。
-4. `wa_reply {id, text}`：用户确认后才调用；这是"人工审核后发送"。群聊(@g.us)会拒绝，提示用户手机手动回复。
-5. `wa_send_text` 只用于用户明确要求的主动开发信，不经过审核队列。
+- **回复有据**：报价/产品/政策问题先 `kb_search`，引用 citation；没命中明说资料不足，请用户 `kb_upsert` 录入
+- **邮箱**：没有邮箱的线索用 `email_find`（模式猜测+MX+SMTP验证）；unverifiable 是 25 端口被封，正常现象，标注即可
+- **dry_run**：smtp.dry_run 默认 true，发送只存预览。帮用户首次真实发送前要确认用户已在设置页关闸
+- **群发**：`wa_broadcast` 默认 dry_run；真实发送有每日上限+随机间隔+3连败熔断，提醒用户封号风险
+- **报价**：`quote_pdf` 生成英文 PDF（先 kb_search 查报价政策），可 `wa_send_media` 发送，自动记 CRM 活动、状态改 quoted
+- **客户回复**：`crm_update` 状态改 replied（自动停邮件序列）；WhatsApp 消息走审核台 `wa_review_queue` → `wa_reply`
+- **定时任务**：`cron_status` 查看序列/收件箱轮询/日报；`cron_status {run:"sequence"}` 手动触发
 
-## 配置提示
+## 工具速查
 
-- SERP 默认 DuckDuckGo 免 key；被限流时换 `engine:"serpapi"`（需 `~/.waimao/config.json` 配 key）或 `engine:"literal"` 只出公式让用户手动搜。
-- Evolution API 未配置时，客服工具会报错并提示配置 `~/.waimao/config.json` 的 evolution 段。
+| 阶段 | 工具 |
+|---|---|
+| 搜索 | lead_search / lead_export_csv |
+| 加工 | lead_enrich / lead_score / email_find / email_verify |
+| 邮件 | email_compose / email_send / email_sequence_start / email_sequence_status |
+| CRM | crm_list / crm_update / crm_activity / crm_export |
+| SOP | sop_create / sop_next / sop_review / sop_approve / sop_status |
+| 知识 | kb_search / kb_upsert / kb_list |
+| WhatsApp | wa_sync / wa_review_queue / wa_reply / wa_send_text / wa_send_media / wa_broadcast |
+| 报价 | quote_pdf |
+| 运维 | cron_status / audit_query |

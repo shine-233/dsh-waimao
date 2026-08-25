@@ -22,23 +22,44 @@ const ctx = {
 };
 plugin.apply(ctx);
 
-// 6 tools + all routes
+// 31 tools + all routes
 assert.deepEqual(
   [...tools.keys()].sort(),
-  ['lead_export_csv', 'lead_search', 'wa_reply', 'wa_review_queue', 'wa_send_text', 'wa_sync'].sort(),
+  [
+    'audit_query', 'cron_status', 'crm_activity', 'crm_export', 'crm_list', 'crm_update',
+    'email_compose', 'email_find', 'email_send', 'email_sequence_start', 'email_sequence_status', 'email_verify',
+    'kb_list', 'kb_search', 'kb_upsert',
+    'lead_enrich', 'lead_export_csv', 'lead_score', 'lead_search',
+    'quote_pdf',
+    'sop_approve', 'sop_create', 'sop_next', 'sop_review', 'sop_status',
+    'wa_broadcast', 'wa_reply', 'wa_review_queue', 'wa_send_media', 'wa_send_text', 'wa_sync',
+  ].sort(),
 );
 for (const path of [
   '/waimao',
   '/waimao/leads',
+  '/waimao/crm',
   '/waimao/review',
+  '/waimao/settings',
   '/waimao/api/status',
   '/waimao/api/markets',
+  '/waimao/api/config',
+  '/waimao/api/test/serp',
   '/waimao/api/leads/search',
+  '/waimao/api/leads/enrich',
   '/waimao/api/leads/export.csv',
+  '/waimao/api/crm/list',
+  '/waimao/api/crm/update',
+  '/waimao/api/crm/activity',
+  '/waimao/api/crm/compose',
+  '/waimao/api/crm/send-email',
+  '/waimao/api/crm/sequence-start',
+  '/waimao/api/crm/export.csv',
   '/waimao/api/review/queue',
   '/waimao/api/review/draft',
   '/waimao/api/review/send',
   '/waimao/api/review/ignore',
+  '/waimao/api/cron',
   '/waimao/webhook/evolution',
 ]) {
   assert.ok(routes.has(path), `missing route ${path}`);
@@ -47,6 +68,21 @@ for (const path of [
 // lead_search tool schema sanity
 const lead = tools.get('lead_search');
 assert.equal(lead.parameters.required[0], 'product');
+// v0.2: new pages render + SOP tools present
+const sopNext = tools.get('sop_next');
+assert.ok(sopNext.description.includes('fail-closed'));
+const broadcast = tools.get('wa_broadcast');
+assert.ok(broadcast.description.includes('熔断'));
+for (const page of [routes.get('/waimao/crm'), routes.get('/waimao/settings')]) {
+  const res = fakeRes();
+  await page.handler(fakeReq('GET'), res);
+  assert.equal(res.statusCode, 200);
+}
+assert.ok(String((await new Promise((resolve) => {
+  const r = fakeRes();
+  routes.get('/waimao/crm').handler(fakeReq('GET'), r);
+  resolve(r.body);
+}))).includes('CRM'));
 
 // real search: literal first (no network), then ddg (network)
 const literal = await lead.execute(

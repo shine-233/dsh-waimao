@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { DATA_DIR, EXPORT_DIR, readConfig } from './config.js';
 import { buildLayers } from './dorks.js';
 import { resolveMarket } from './markets.js';
-import { serpSearch } from './serp.js';
+import { serpSearchChained } from './serp.js';
 
 const LEADS_FILE = join(DATA_DIR, 'leads.jsonl');
 
@@ -83,18 +83,24 @@ export async function runLeadSearch(opts) {
   const seen = new Set();
   const results = [];
   const layerSummaries = [];
+  let layerFallbacks = null;
 
   for (const layer of layers) {
     let items = [];
     let error = null;
     if (engine !== 'literal') {
       try {
-        items = await serpSearch(layer.query, {
+        const chained = await serpSearchChained(layer.query, {
           config,
           engine,
           maxResults: perLayer * 2,
           signal: opts.signal,
         });
+        items = chained.results;
+        if (chained.engine !== engine) {
+          layerFallbacks = layerFallbacks ?? [];
+          layerFallbacks.push(`${layer.id}:${engine}->${chained.engine}`);
+        }
       } catch (cause) {
         error = String(cause?.message ?? cause);
       }
@@ -134,6 +140,7 @@ export async function runLeadSearch(opts) {
     marketLabel: market.label,
     style: market.style,
     engine,
+    ...(layerFallbacks ? { engineFallbacks: layerFallbacks } : {}),
     layers: layerSummaries,
     results,
     total: results.length,

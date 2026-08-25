@@ -106,7 +106,7 @@ async function searchDdg(query, { signal, proxy }) {
   return results;
 }
 
-async function searchSerpApi(query, { signal, apiKey, maxResults, proxy }) {
+async function searchSerpApi(query, { signal, apiKey, maxResults, proxy, maps = false }) {
   if (!apiKey) {
     throw new Error('engine "serpapi" needs serp.serpapiKey in ~/.waimao/config.json');
   }
@@ -114,6 +114,12 @@ async function searchSerpApi(query, { signal, apiKey, maxResults, proxy }) {
   url.searchParams.set('q', query);
   url.searchParams.set('api_key', apiKey);
   url.searchParams.set('num', String(Math.min(Math.max(maxResults ?? 10, 1), 20)));
+  if (maps) {
+    // Google Maps 数据源：type=search 找商家，返回 title/address/phone/website
+    url.searchParams.set('engine', 'google_maps');
+    url.searchParams.set('type', 'search');
+    url.searchParams.delete('num');
+  }
   const response = await httpFetch(
     url,
     { headers: { 'user-agent': UA }, signal },
@@ -126,6 +132,15 @@ async function searchSerpApi(query, { signal, apiKey, maxResults, proxy }) {
   if (payload.error) {
     throw new Error(`serpapi error: ${payload.error}`);
   }
+  if (maps) {
+    return (payload.local_results ?? []).map((item) => ({
+      title: stripHtml(item.title),
+      url: item.website ?? `https://www.google.com/maps/place/${encodeURIComponent(item.title)}`,
+      snippet: [item.address, item.phone, (item.extensions ?? []).join(', ')].filter(Boolean).join(' | '),
+      phone: item.phone ?? '',
+      address: item.address ?? '',
+    }));
+  }
   return (payload.organic_results ?? []).map((item) => ({
     title: stripHtml(item.title),
     url: item.link ?? '',
@@ -134,7 +149,7 @@ async function searchSerpApi(query, { signal, apiKey, maxResults, proxy }) {
 }
 
 /**
- * Run one SERP query on the configured engine.
+ * Run one SERP query on the configured engine (single engine, no failover).
  * @returns {Promise<Array<{title: string, url: string, snippet: string}>>}
  */
 export async function serpSearch(query, opts = {}) {
@@ -146,6 +161,7 @@ export async function serpSearch(query, opts = {}) {
     return searchSerpApi(query, {
       signal,
       proxy,
+      maps: opts.maps === true,
       apiKey: opts.serpapiKey ?? config.serp.serpapiKey,
       maxResults: opts.maxResults,
     });
@@ -154,4 +170,59 @@ export async function serpSearch(query, opts = {}) {
     throw new Error(`unknown serp engine: ${engine} (use "ddg" or "serpapi")`);
   }
   return searchDdg(query, { signal, proxy });
+}
+
+const cooldownUntil = new Map(); // engine -> ts
+
+export function engineCooldowns() {
+  return Object.fromEntries(
+    [...cooldownUntil.entries()]
+      .filter(([, until]) => until > Date.now())
+      .map(([engine, until]) => [engine, new Date(until).toISOString()]),
+  );
+}
+
+function markCooldown(engine, minutes) {
+  cooldownUntil.set(engine, Date.now() + minutes * 60_000);
+}
+
+/**
+ * Run one SERP query with the configured failover chain.
+ * opts: {engine?, maps?, config?, signal, maxResults}
+ * @returns {Promise<{results: Array, engine: string, attempts: Array}>}
+ */
+export async function serpSearchChained(query, opts = {}) {
+  const config = opts.config ?? readConfig();
+  const chain = [];
+  const preferred = opts.engine || config.serp.engine || 'ddg';
+  chain.push(preferred);
+  for (const engine of config.serp.chain ?? []) {
+    if (!chain.includes(engine)) {
+      chain.push(engine);
+    }
+  }
+  const cooldownMin = config.serp.cooldownMin ?? 10;
+  const attempts = [];
+  let lastError = null;
+  for (const engine of chain) {
+    if (engine === 'literal') {
+      continue;
+    }
+    const until = cooldownUntil.get(engine) ?? 0;
+    if (until > Date.now()) {
+      attempts.push({ engine, skipped: `cooldown until ${new Date(until).toISOString()}` });
+      continue;
+    }
+    try {
+      const results = await serpSearch(query, { ...opts, engine, config });
+      return { results, engine, attempts };
+    } catch (error) {
+      lastError = error;
+      attempts.push({ engine, error: String(error?.message ?? error).slice(0, 150) });
+      markCooldown(engine, cooldownMin);
+    }
+  }
+  throw new Error(
+    `all serp engines failed (${chain.join(' -> ')}): ${String(lastError?.message ?? lastError).slice(0, 200)}`,
+  );
 }
