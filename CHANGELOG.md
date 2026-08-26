@@ -2,9 +2,18 @@
 
 ## 0.7.2 (2026-08-26)
 
-补齐 XMT 导航栏最后一块 + GitHub 仓库治理 + 第二轮逐字审计修复 + 第三轮功能测试。
+补齐 XMT 导航栏最后一块 + GitHub 仓库治理 + 多轮审计修复 + **端到端本地仿真测试**。
 
-### 第三轮：新增 10 套测试中的两套，抓出并修复
+### 第四轮：端到端仿真（`test/e2e-local.mjs`，不再需要任何真实外部服务）
+本机起四个假服务器（SMTP / IMAP / DeepSeek 兼容 / Evolution 兼容），插件配置指向它们，走**真实代码路径**验证 8 大闭环。上线即抓出 3 个此前所有静态审查都没发现的严重 bug：
+- **`email_send` 100% 崩溃**：`approvedVia` 变量未声明（ReferenceError），SOP 和普通发送全挂——并行会话加"冷邮件审批门"时引入
+- **跟进序列无限重复发送**：`dueSteps()` 返回拷贝，cron 标记的是副本，原步骤永远 pending → 每轮把同样的跟进重发一遍（骚扰买家）
+- **IMAP 正文按字节精确截断**：字面量 {N} 是字节数，旧启发式把真实服务器短回复后的 `)` 带进正文——买家回 "STOP" 被存成 "STOP)"，退订识别失效。新增 `sliceByBytes()` 按 UTF-8 字节精确切
+- `resolveWaMedia` 短 base64（<64字符）被误判成文件路径 → 改为严格 base64 校验 + 文件优先
+
+仿真同时验证：SMTP 握手/AUTH/DATA/dot-stuffing/RFC2047 中文、冷邮件审批门三态（拒绝/网页放行/SOP 放行）、SOP 八阶段全流程（批准稿内容强制、recordOutreach、结案报告）、回复扫描（QP 中文解码/AI 分类/停序列/STOP 抑制）、序列 Re: 线程、WhatsApp webhook→队列→AI 草稿→发送、Evolution 扫码/状态/媒体、PDF xref 逐字节校验、dailyCap 闸门。
+
+### 第三轮：新增两套测试，抓出并修复
 - **新增 `test/v8-functional.mjs`**（新代码纯函数逐一验证）+ **`test/page-consistency.mjs`**（页面内联 JS 的元素 ID / 事件处理函数 / API 端点与实际存在交叉验证——这类错只有真开浏览器才会暴露）
 - **回复分类规则三处缺口**：①"John has left the company"（第三方离职）匹配不到 wrong-person；②Gmail 标准退信措辞 "address not found" 不在 bounce 规则里；③既说找错人又抄送同事的回复应优先归 referral（有新联系人可跟进），调整规则顺序
 - **WhatsApp 群发支持 Spintax**：正文 `{a|b|c}` 每条随机选一项（与邮件侧对齐，降低重复内容判定）
