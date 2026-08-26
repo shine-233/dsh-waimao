@@ -1133,7 +1133,7 @@ function noteWaActivity(leadId, note, actor = 'agent') {
 }
 
 /** wa_send_media 的 media 参数：支持本地文件路径（限 exports/data 目录），自动转 base64。 */
-async function resolveWaMedia(media, filename) {
+export async function resolveWaMedia(media, filename) {
   const raw = String(media ?? '');
   if (/^https?:\/\//i.test(raw) || /^[A-Za-z0-9+/=\s]+$/.test(raw.slice(0, 256)) && raw.length > 64) {
     return { media: raw };

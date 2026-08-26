@@ -38,40 +38,41 @@ export async function videoScript({ product, audience = 'importers & wholesalers
   if (!config.deepseek.apiKey) {
     return FALLBACK({ product, audience, seconds });
   }
-  const response = await fetch(`${config.deepseek.baseURL.replace(/\/+$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${config.deepseek.apiKey}` },
-    body: JSON.stringify({
-      model: config.deepseek.model ?? 'deepseek-chat',
-      messages: [
-        {
-          role: 'system',
-          content: [
-            `You are a short-video scriptwriter for B2B export marketing on ${platform}.`,
-            `Write a ${seconds}-second script in ${language}, ${tone} tone.`,
-            'Output JSON only: {"hook":{"t":"0-3s","text":"..."},"scenes":[{"t":"...","text":"..."}],"cta":{"t":"...","text":"..."},"hashtags":["..."]}',
-            'Hook must stop the scroll in 3 seconds. Scenes include visual directions in brackets. 3-4 scenes max.',
-          ].join('\n'),
-        },
-        { role: 'user', content: `Product: ${product}\nAudience: ${audience}` },
-      ],
-      temperature: 0.8,
-      max_tokens: 600,
-      response_format: { type: 'json_object' },
-    }),
-    signal: AbortSignal.timeout(60_000),
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    return FALLBACK({ product, audience, seconds });
-  }
   try {
+    const response = await fetch(`${config.deepseek.baseURL.replace(/\/+$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${config.deepseek.apiKey}` },
+      body: JSON.stringify({
+        model: config.deepseek.model ?? 'deepseek-chat',
+        messages: [
+          {
+            role: 'system',
+            content: [
+              `You are a short-video scriptwriter for B2B export marketing on ${platform}.`,
+              `Write a ${seconds}-second script in ${language}, ${tone} tone.`,
+              'Output JSON only: {"hook":{"t":"0-3s","text":"..."},"scenes":[{"t":"...","text":"..."}],"cta":{"t":"...","text":"..."},"hashtags":["..."]}',
+              'Hook must stop the scroll in 3 seconds. Scenes include visual directions in brackets. 3-4 scenes max.',
+            ].join('\n'),
+          },
+          { role: 'user', content: `Product: ${product}\nAudience: ${audience}` },
+        ],
+        temperature: 0.8,
+        max_tokens: 600,
+        response_format: { type: 'json_object' },
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) {
+      return FALLBACK({ product, audience, seconds });
+    }
+    const payload = await response.json().catch(() => null);
     const parsed = JSON.parse((payload?.choices?.[0]?.message?.content ?? '{}').replace(/^```json\s*|```\s*$/g, ''));
     if (!parsed.hook || !Array.isArray(parsed.scenes)) {
       return FALLBACK({ product, audience, seconds });
     }
     return { duration: `${seconds}s`, ...parsed, generatedBy: 'ai' };
   } catch {
+    // 网络/DNS/超时等一切失败都回退模板——工具承诺"无 key/失败回退"
     return FALLBACK({ product, audience, seconds });
   }
 }

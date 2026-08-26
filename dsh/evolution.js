@@ -24,15 +24,21 @@ function requireEvo(config) {
 async function evoFetch(path, { method = 'GET', body, signal } = {}) {
   const { base, apiKey, instance } = requireEvo(readConfig());
   const url = `${base}${path.replace('{instance}', encodeURIComponent(instance))}`;
-  const response = await fetch(url, {
-    method,
-    headers: {
-      'content-type': 'application/json',
-      apikey: apiKey,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: signal ?? AbortSignal.timeout(20_000),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        'content-type': 'application/json',
+        apikey: apiKey,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: signal ?? AbortSignal.timeout(20_000),
+    });
+  } catch (error) {
+    // 裸 "fetch failed" 没有信息量：带上 base 与最常见原因
+    throw new Error(`Evolution 不可达 (${base})：${String(error?.message ?? error).slice(0, 120)}——确认 Evolution 服务在运行、baseURL/端口正确`);
+  }
   const text = await response.text();
   let payload;
   try {

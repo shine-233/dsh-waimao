@@ -40,6 +40,8 @@
 - 设置页同步两个新开关；email_send 工具描述如实说明闸门行为
 
 ### 第三轮全量复审修复（WhatsApp 链路 / SOP / 前端 / 支持模块）
+- **深度功能探针 `test/v9-deep.mjs`**（新增第 11 个测试套件）：全模块加载检查 + **49 个工具逐个真实执行 execute**（TypeError/ReferenceError/字面 undefined 视为真 bug，业务错误白名单分类）+ SOP 全生命周期（含驳回不卡门/remove/outreach 回写/结案计数）+ CSV 中文表头往返 + Instantly 1200 条分批 [500,500,200] + WA 媒体桥路径白名单
+- 探针当场抓到并修复：**video_script 网络层错误不回退模板**（fetch 抛错直接穿透，只有 HTTP !ok 才回退）；Evolution 网络错误裸 "fetch failed" 无信息量 → 包装成"服务不可达+排查指引"
 - **WhatsApp 补上三大断裂**：① `wa.dryRun` 总闸（此前配好即真实外发，零闸门，与 cron 注释矛盾）；② wa_send_media 支持本地文件路径（限 exports/data 目录，quote_pdf 产物直接传——此前"配合报价单发送"根本接不通）；③ WA 收发自动按手机号尾号匹配 CRM 线索并记活动时间线（此前完全没有 CRM 回写）
 - **SOP 两处断线**：email_send 成功后回写 task.outreach（此前结案报告触达统计恒为 0/dryRunOnly）；驳回的草稿改为"已决策"不再永久卡死审批门，sop_approve 支持 remove 直接移除
 - **CSV 往返丢联系方式**：导入别名补齐自家中文表头（邮箱/WhatsApp/电话/LinkedIn）——此前导出的备份改完导回，联系方式全部静默丢失
