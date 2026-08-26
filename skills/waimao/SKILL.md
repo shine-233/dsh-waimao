@@ -37,7 +37,8 @@ description: 外贸获客方法论：三层搜索→线索加工(提取/过滤/I
 - **导出**：用户要把线索导入 Instantly/Smartlead 等发信工具时，用 `crm_export` 或 `lead_export_csv` 传 `format:"importer"`，标准列免映射
 - **度量**：定期 `stats_report` 看分层回复率+打开率/点击率——极高分层应显著高于低分层，否则校准评分；打开率低=送达率/标题问题，打开高回复低=内容问题
 - **送达率**：首次真实发信前必跑 `deliverability_check`（SPF/DKIM/DMARC/MX），有缺口先修
-- **预热**：新域名/新账号先 `warmup_status {action:"run"}` 跑几天互动预热；预热爬坡（第1周5封/天）只约束预热邮件本身，业务发送受 smtp.dailyCap 保护
+- **预热**：新域名/新账号先 `warmup_status {action:"run"}` 跑几天互动预热；预热池=主账号+smtp.accounts 按天轮换配对，每邮箱独立爬坡（第1周5封/天）只约束预热邮件本身，业务发送受 smtp.dailyCap 保护
+- **Instantly**：用户用 Instantly 发信时，`instantly_campaign_list` 查 campaign_id → `instantly_push_leads` 推 CRM 高分对口线索（dry_run 默认 true 先预览数量与样例）；推完在 Instantly 侧激活活动
 - **追踪**：用户配置 track.publicBaseUrl 后自动生效；smtp.plainText 开着时不注入追踪（纯文本投递率更好）。解读数据时打开率≠阅读率（有邮件客户端预取）
 - **定时任务**：`cron_status` 查看全部任务；`cron_status {run:"replyScan"}` 手动触发
 
@@ -55,4 +56,5 @@ description: 外贸获客方法论：三层搜索→线索加工(提取/过滤/I
 | WhatsApp | wa_sync / wa_review_queue / wa_reply / wa_send_text / wa_send_media / wa_broadcast |
 | 报价 | quote_pdf / proforma_pdf(PI发票) / price_calc(Incoterm成本+利润率) |
 | 内容 | market_scan(蓝海选国) / video_script(口播脚本) |
+| Instantly | instantly_campaign_list / instantly_push_leads(推线索进活动) |
 | 运维 | cron_status / audit_query / data_backup(全量备份) / warmup_status / deliverability_check / template_save / template_list / template_delete |

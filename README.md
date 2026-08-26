@@ -9,7 +9,7 @@
    → CRM管线 → 官网监控(意图信号) → 报价PDF → 结案复盘 → 效果统计
 ```
 
-## 功能总览（50 个对话工具 + 5 个网页）
+## 功能总览（50 个对话工具 + 4 个网页）
 
 | 模块 | 能力 |
 |---|---|
@@ -118,7 +118,7 @@ cloudflared tunnel --url http://127.0.0.1:3080
 }
 ```
 
-cron 每天自动跑一轮互动（主账号↔伙伴账号互发+自动回复+标星），预热爬坡第1周限5封/天、每周+5；smtp.dry_run=true 时预热同样不真实发送。发信前先 `deliverability_check` 体检 SPF/DKIM/DMARC。
+cron 每天自动跑一轮预热池互动：池内邮箱按天轮换配对互发（主账号 + smtp.accounts 都参与，`warmup:false` 可退出），每邮箱独立爬坡第1周限5封/天、每周+5；收件侧自动回复+标星+已读，误入垃圾箱的预热邮件尽力挪回 INBOX。smtp.dry_run=true 时预热同样不真实发送。发信前先 `deliverability_check` 体检 SPF/DKIM/DMARC。
 
 ## 安全设计
 

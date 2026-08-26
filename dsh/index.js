@@ -513,7 +513,9 @@ function registerEmailComposeTool(ctx) {
         draft = await composeMod.composeEmail({
           kind: args?.kind ?? 'first',
           step: args?.step,
-          name: lead.contacts?.contactName ?? '',
+          // 联系人名：优先用参数（智能体从搜索结果/LinkedIn 层拿到时传入），
+          // 其次用 CRM 里存的名字；都没有模板兜底 "Hi there"
+          name: String(args?.contact_name ?? lead.contacts?.contactName ?? '').trim(),
           company: lead.company || lead.domain,
           product: icp.product || 'our products',
           buyers: icp.buyers || undefined,
@@ -1492,7 +1494,7 @@ function registerDataBackupTool(ctx) {
       } catch {}
       const bundle = {
         exportedAt: new Date().toISOString(),
-        version: '0.7.1',
+        version: '0.7.2',
         crm: data('crm.json'),
         leads: data('leads.jsonl')?.split?.('\n').filter(Boolean) ?? null,
         kb: data('kb.json'),

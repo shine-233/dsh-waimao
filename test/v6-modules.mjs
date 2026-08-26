@@ -124,6 +124,27 @@ const localParts = cron.recipientLocalTime('br', new Date('2026-08-26T12:00:00Z'
 assert.equal(localParts.hour, 9);
 assert.ok(localParts.dow >= 0 && localParts.dow <= 6);
 
+/* ---------- 预热池配对轮换 ---------- */
+const warmupMod = await import('../dsh/warmup.js');
+const pairsA = warmupMod.pairRotation(4, 0);
+const pairsB = warmupMod.pairRotation(4, 1);
+assert.equal(pairsA.length, 4);
+assert.ok(pairsA.every(([s, r]) => s !== r && s >= 0 && r < 4), '不能自己给自己发');
+assert.ok(JSON.stringify(pairsA) !== JSON.stringify(pairsB), '隔天必须换配对');
+// 池参与者构建（纯函数，喂假配置）
+const fakePoolCfg = {
+  smtp: { host: 'smtp.main.com', from: 'main@main.com', accounts: [
+    { host: 'smtp.b.com', from: 'b@b.com' },
+    { host: 'smtp.c.com', from: 'c@c.com', warmup: false },
+    { host: 'smtp.main.com', from: 'main@main.com' }, // 与主账号重复，应被去重
+  ] },
+  imap: { host: 'imap.main.com', user: 'main@main.com', pass: 'x' },
+  warmup: { partners: [{ host: 'smtp.d.com', user: 'd@d.com', pass: 'x', imapHost: 'imap.d.com' }] },
+};
+const pool = warmupMod.poolParticipants(fakePoolCfg);
+assert.deepEqual(pool.map((p) => p.email).sort(), ['b@b.com', 'd@d.com', 'main@main.com'], 'warmup:false 退出、重复邮箱去重');
+assert.equal(pool.find((p) => p.email === 'd@d.com').imap.host, 'imap.d.com');
+
 /* ---------- 时区窗 ---------- */
 const { MARKETS } = await import('../dsh/markets.js');
 assert.equal(typeof MARKETS.mx.utc, 'number');
