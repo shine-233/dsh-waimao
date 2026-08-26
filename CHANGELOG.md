@@ -24,6 +24,11 @@
 ### 工具数
 48 → **50**（并行线加了 instantly_campaign_list / instantly_push_leads）；网页 4 → **5**
 
+### 预热池 + Instantly 实现（并行线）
+- **多收件箱预热池**：参与池 = 主账号 + `smtp.accounts`（`warmup:false` 退出）+ 传统 partners，≥2 个邮箱按天轮换配对互发；每邮箱独立爬坡计时（各自从首次参与起算）；收件侧自动回复/标星已读 + **误入垃圾箱 UID MOVE 回 INBOX**（[Gmail]/Spam、Junk 等逐一探测，服务器不支持则跳过）；4 组内容模板按标签哈希轮换，配 DeepSeek key 时可生成自然语句（失败回退模板）；互动自动化改走 ImapSession.exec 规范标签机
+- **Instantly 客户端**（`dsh/instantly.js`）：严格对齐官方 OpenAPI v2——Bearer 鉴权、`POST /api/v2/leads/add`（campaign_id/list_id 二选一、≤1000/批、company_name/job_title/personalization 字段）、`GET campaigns/accounts`；`instantly_push_leads` 按状态/最低评分/fit 过滤 + 同邮箱去重 + ≤500/批推送，reason 进 personalization 变量，dry_run 默认 true；走 serp.proxy 可用
+- 测试补齐：pairRotation 轮换断言、池参与者构建（去重/warmup:false 退出）、host-sim 工具清单
+
 ## 0.7.1 (2026-08-26)
 
 全库审查后的两批修复：先修会伤客户/丢数据的严重 bug 与 IMAP 链路硬伤，再对照 GitHub 同类实战项目（OpenOutreach / gtm-mcp / warmbly）把"假功能"落地、补齐实战差距。
