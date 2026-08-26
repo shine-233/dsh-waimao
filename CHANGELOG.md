@@ -2,7 +2,13 @@
 
 ## 0.7.2 (2026-08-26)
 
-补齐 XMT 导航栏最后一块 + GitHub 仓库治理 + 第二轮逐字审计修复。
+补齐 XMT 导航栏最后一块 + GitHub 仓库治理 + 第二轮逐字审计修复 + 第三轮功能测试。
+
+### 第三轮：新增 10 套测试中的两套，抓出并修复
+- **新增 `test/v8-functional.mjs`**（新代码纯函数逐一验证）+ **`test/page-consistency.mjs`**（页面内联 JS 的元素 ID / 事件处理函数 / API 端点与实际存在交叉验证——这类错只有真开浏览器才会暴露）
+- **回复分类规则三处缺口**：①"John has left the company"（第三方离职）匹配不到 wrong-person；②Gmail 标准退信措辞 "address not found" 不在 bounce 规则里；③既说找错人又抄送同事的回复应优先归 referral（有新联系人可跟进），调整规则顺序
+- **WhatsApp 群发支持 Spintax**：正文 `{a|b|c}` 每条随机选一项（与邮件侧对齐，降低重复内容判定）
+- `email_send` 拒绝 subject/body 同时为空（防发空邮件）
 
 ### 第二轮审计修复
 - **网页定价计算器漏关税**：pricing.js 已支持 duty_rate（DDP 必填），但计算器弹窗没有这个输入框，网页算出的 DDP 报价永远漏掉关税——正是工具描述里警告的坑。已补输入框

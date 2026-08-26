@@ -9,11 +9,12 @@ import { imapLogin, imapSelect, imapSearch, imapSearchFrom, imapFetchMessage, im
 import { audit } from '../audit.js';
 
 const RULES = [
-  { category: 'bounce', re: /undeliverable|delivery (status|failure) notification|returned mail|mailbox (not found|unavailable|full)|address does not exist|user unknown|recipient rejected|no such user|退信/i },
+  { category: 'bounce', re: /undeliverable|delivery (status|failure) notification|returned mail|mailbox (not found|unavailable|full)|address (does not exist|not found)|user unknown|recipient rejected|no such user|couldn't (be )?(delivered|found)|退信/i },
   { category: 'unsubscribe', re: /\bunsubscribe\b|\bopt[- ]?out\b|don'?t (want|email|contact|message)|remove me|take me off|no longer wish|stop emailing|退订|不要再联系/i },
   { category: 'not-interested', re: /not interested|no thanks|we (are )?covered|don'?t need|no need|not looking|不感兴趣|暂无需求/i },
-  { category: 'wrong-person', re: /\bwrong person\b|i (have )?(left|quit) (the )?company|no longer with (the )?company|try reaching|i'?m not the right|已离职|不是我负责/i },
+  // referral 在 wrong-person 之前：既说找错人又抄送同事的回复，归 referral（有新联系人可跟进）
   { category: 'referral', re: /cc'?ing|forward(ed|ing)? (this|to)|colleague who handles|let me (connect|introduce) you to|推荐联系/i },
+  { category: 'wrong-person', re: /\bwrong person\b|i'?m not the right|(?:i |he |she |they )?(?:has|have) left (?:the )?company|(?:is|are) no longer (?:with|at)(?: the)? company|no longer with (?:the )?company|try reaching|(?:he|she|they) (?:is|are) not (?:here )?anymore|已离职|不是我负责|已经离职/i },
   { category: 'ooo', re: /out of (the )?office|annual leave|vacation until|back (on|in) (monday|the office)|自动回复/i },
   { category: 'auto', re: /\bauto(matic)?[- ]?reply\b|mailer-daemon|postmaster@|no-?reply@/i },
   { category: 'meeting', re: /\b(call|meeting|demo|zoom|teams|google meet)\b|\bschedule[d]?\b|calendar|available|slot|约个?(电话|会议|时间)/i },

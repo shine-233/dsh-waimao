@@ -26,11 +26,11 @@ import { newSequence, dueSteps, sequenceSummary, stopSequence } from './mail/seq
 import { scanReplies } from './mail/replies.js';
 import { sendMail } from './mail/smtp.js';
 import * as monitorMod from './monitor.js';
-import { marketOptions } from './markets.js';import { mkdirSync, writeFileSync, statSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { marketOptions } from './markets.js';import { mkdirSync, writeFileSync, statSync, readFileSync, existsSync } from 'node:fs';
+import { dirname, join, resolve, basename } from 'node:path';
 import * as pagesMod from './pages.js';
 import { quotePdf, quoteFileName } from './pdf.js';
-import { readConfig, EXPORT_DIR } from './config.js';
+import { readConfig, EXPORT_DIR, DATA_DIR } from './config.js';
 import { scoreLead } from './score.js';
 import * as sopMod from './sop.js';
 import * as statsMod from './stats.js';
@@ -605,7 +605,9 @@ function registerEmailSendTool(ctx) {
       // 只在无 SOP 时生效——防止审批后被偷换内容。
       let finalSubject = String(args?.subject ?? '');
       let finalBody = String(args?.body ?? '');
-      let approvedVia;
+      if (!finalSubject.trim() && !finalBody.trim()) {
+        throw new Error('subject 和 body 不能同时为空（拒绝发空邮件）');
+      }
       if (args?.task_id && args?.draft_id) {
         const sopDraft = sopMod.assertApproved(args.task_id, args.draft_id);
         if (sopDraft.leadId && sopDraft.leadId !== lead.id) {
@@ -1052,8 +1054,7 @@ function registerKbListTool(ctx) {
 /* 工具：WhatsApp（同步/审核/发送/媒体/群发）                            */
 /* ------------------------------------------------------------------ */
 
-function registerWaSyncTool(ctx) {
-  ctx.tools.register({
+function registerWaSyncTool(ctx) {  ctx.tools.register({
     name: 'wa_sync',
     description: '从 Evolution API 拉取 WhatsApp 最近会话，买家消息并入待审队列（webhook 不可达时的轮询兜底）。',
     parameters: {
@@ -1083,11 +1084,61 @@ function registerWaSyncTool(ctx) {
         }
         const entries = evolutionMod.normalizeHistory(history, jid).filter((item) => !item.fromMe && item.chatJid && !item.chatJid.endsWith('@g.us'));
         scanned += entries.length;
-        added += storeMod.upsertIncoming(entries).added;
+        const { added: newCount } = storeMod.upsertIncoming(entries);
+        added += newCount;
+        // 新买家消息自动关联 CRM 线索时间线（按手机号尾号匹配）
+        for (const entry of entries.slice(-newCount)) {
+          const lead = findLeadByPhone(entry.chatJid);
+          noteWaActivity(lead?.id, `WA买家消息[${entry.pushName ?? '未知'}]: ${String(entry.text ?? '').slice(0, 100)}`, 'cron');
+        }
       }
       return { chatsScanned: wanted.length, messagesScanned: scanned, added, queue: storeMod.stats() };
     },
   });
+}
+
+/**
+ * WhatsApp 公共助手：
+ *  - waDryRunGate：wa.dryRun 总闸（与 smtp.dry_run 同思路），真实发送前必须关闸
+ *  - findLeadByPhone：手机号尾号匹配 CRM 线索（whatsapps/phones 都算）
+ *  - noteWaActivity：WA 收发自动记入对应线索的活动时间线
+ */
+function waDryRunGate() {
+  if (readConfig().wa?.dryRun !== false) {
+    throw new Error('wa.dryRun=true：WhatsApp 只记录不真实发送。到设置页「群发频控」关闸后重试');
+  }
+}
+
+function findLeadByPhone(number) {
+  return crmMod.findLeadByPhone(number);
+}
+
+function noteWaActivity(leadId, note, actor = 'agent') {
+  if (!leadId) {
+    return;
+  }
+  try {
+    crmMod.addActivity(leadId, { type: 'wa', note: String(note).slice(0, 160), actor });
+  } catch {}
+}
+
+/** wa_send_media 的 media 参数：支持本地文件路径（限 exports/data 目录），自动转 base64。 */
+async function resolveWaMedia(media, filename) {
+  const raw = String(media ?? '');
+  if (/^https?:\/\//i.test(raw) || /^[A-Za-z0-9+/=\s]+$/.test(raw.slice(0, 256)) && raw.length > 64) {
+    return { media: raw };
+  }
+  // 本地路径桥：quote_pdf 返回的 file 直接可发
+  const path = raw.replace(/^file:\/\//, '');
+  if (!existsSync(path)) {
+    throw new Error(`media 不是 URL/base64，也不是存在的文件: ${path}`);
+  }
+  const allowed = [EXPORT_DIR, DATA_DIR].map((dir) => resolve(dir));
+  if (!allowed.some((dir) => resolve(path).startsWith(dir))) {
+    throw new Error(`只允许发送 exports/data 目录下的文件（quote_pdf 的产物即可）: ${path}`);
+  }
+  const base64 = readFileSync(path).toString('base64');
+  return { media: base64, filename: filename ?? basename(path) };
 }
 
 function registerWaQueueTool(ctx) {
@@ -1144,10 +1195,13 @@ function registerWaReplyTool(ctx) {
       if (message.chatJid.endsWith('@g.us')) {
         throw new Error('群聊(@g.us)拒绝自动发送');
       }
+      waDryRunGate();
       await evolutionMod.sendText(message.chatJid, text);
       storeMod.updateMessage(args.id, { status: 'sent', draft: text, sentAt: new Date().toISOString() });
       auditMod.audit('wa.send', { to: message.chatJid, id: args.id });
-      return { id: args.id, status: 'sent', to: message.chatJid };
+      const lead = findLeadByPhone(message.chatJid);
+      noteWaActivity(lead?.id, `WA回复已发送: ${text}`, args?.actor === 'user' ? 'user' : 'agent');
+      return { id: args.id, status: 'sent', to: message.chatJid, leadId: lead?.id ?? null };
     },
   });
 }
@@ -1165,9 +1219,12 @@ function registerWaSendTextTool(ctx) {
     isConcurrencySafe: () => false,
     presentCall: (args) => ({ card: 'generic', title: `wa_send_text: ${args?.number ?? ''}`, kind: 'send', rawInput: args }),
     async execute(args) {
+      waDryRunGate();
       const result = await evolutionMod.sendText(args?.number, args?.text);
       auditMod.audit('wa.send', { to: args?.number });
-      return { sent: true, to: String(args?.number) };
+      const lead = findLeadByPhone(args?.number);
+      noteWaActivity(lead?.id, `WA主动开发: ${String(args?.text ?? '').slice(0, 80)}`);
+      return { sent: true, to: String(args?.number), leadId: lead?.id ?? null };
     },
   });
 }
@@ -1175,12 +1232,12 @@ function registerWaSendTextTool(ctx) {
 function registerWaSendMediaTool(ctx) {
   ctx.tools.register({
     name: 'wa_send_media',
-    description: '发 WhatsApp 媒体消息（图片/PDF/文档）。media 传 URL 或 base64。常配合 quote_pdf 发报价单。',
+    description: '发 WhatsApp 媒体消息（图片/PDF/文档）。media 传 URL、base64 或本地文件路径（quote_pdf 返回的 file 可直接传，自动转 base64）。',
     parameters: {
       type: 'object',
       properties: {
         number: { type: 'string' },
-        media: { type: 'string', description: 'http(s) URL 或 base64' },
+        media: { type: 'string', description: 'http(s) URL / base64 / 本地文件路径（限 exports/data 目录）' },
         mediatype: { type: 'string', enum: ['image', 'document', 'video', 'audio'] },
         filename: { type: 'string' },
         caption: { type: 'string' },
@@ -1191,9 +1248,13 @@ function registerWaSendMediaTool(ctx) {
     isConcurrencySafe: () => false,
     presentCall: (args) => ({ card: 'generic', title: `wa_send_media: ${args?.number ?? ''}`, kind: 'send', rawInput: { number: args?.number, mediatype: args?.mediatype } }),
     async execute(args) {
-      const result = await evolutionMod.sendMedia(args?.number, { media: args?.media, mediatype: args?.mediatype ?? 'document', filename: args?.filename, caption: args?.caption });
+      waDryRunGate();
+      const resolved = await resolveWaMedia(args?.media, args?.filename);
+      const result = await evolutionMod.sendMedia(args?.number, { media: resolved.media, mediatype: args?.mediatype ?? 'document', filename: resolved.filename ?? args?.filename, caption: args?.caption });
       auditMod.audit('wa.sendMedia', { to: args?.number, mediatype: args?.mediatype ?? 'document' });
-      return { sent: true, to: String(args?.number) };
+      const lead = findLeadByPhone(args?.number);
+      noteWaActivity(lead?.id, `WA媒体已发送: ${resolved.filename ?? args?.filename ?? args?.mediatype ?? 'file'}`);
+      return { sent: true, to: String(args?.number), leadId: lead?.id ?? null };
     },
   });
 }
@@ -1202,7 +1263,7 @@ function registerWaBroadcastTool(ctx) {
   ctx.tools.register({
     name: 'wa_broadcast',
     description:
-      '受控 WhatsApp 群发：随机间隔(默认20-90秒)+每日上限(默认200)+连续3次失败熔断。可从 CRM 按分层/状态取收件人。⚠ 高频群发有封号风险，请控制节奏。',
+      '受控 WhatsApp 群发：随机间隔(默认20-90秒)+每日上限(默认200)+连续3次失败熔断。正文支持 {a|b|c} Spintax（每条随机选一项，降低重复判定）。可从 CRM 按分层/状态取收件人。⚠ 高频群发有封号风险，请控制节奏。',
     parameters: {
       type: 'object',
       properties: {
@@ -2305,7 +2366,9 @@ function registerRoutes(scope) {
       await evolutionMod.sendText(message.chatJid, text);
       storeMod.updateMessage(message.id, { status: 'sent', draft: text, sentAt: new Date().toISOString() });
       auditMod.audit('wa.send', { to: message.chatJid, via: 'review-page' }, 'user');
-      httpMod.sendJson(res, 200, { id: message.id, status: 'sent' });
+      const lead = findLeadByPhone(message.chatJid);
+      noteWaActivity(lead?.id, `WA回复已发送: ${text}`, 'user');
+      httpMod.sendJson(res, 200, { id: message.id, status: 'sent', leadId: lead?.id ?? null });
     } catch (error) {
       httpMod.sendJson(res, 400, { error: String(error?.message ?? error) });
     }

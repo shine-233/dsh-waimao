@@ -2,6 +2,7 @@
 // 兼容 v2 的常见路径；webhook 载荷同时兼容 v1.8/v2 的两种形状。
 import { readConfig } from './config.js';
 import { audit } from './audit.js';
+import { spinText } from './content.js';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DATA_DIR } from './config.js';
@@ -139,7 +140,7 @@ export async function broadcast(targets, { onProgress, signal } = {}) {
     try {
       const result = target.media
         ? await sendMedia(target.number, target.media)
-        : await sendText(target.number, target.text);
+        : await sendText(target.number, spinText(target.text));
       state.sentToday += 1;
       saveBroadcastState(state);
       consecutiveFailures = 0;
