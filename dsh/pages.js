@@ -524,7 +524,8 @@ function crmPage() {
     `el.innerHTML='<div class="num">0</div><div class="lbl">'+esc(cd.l)+'</div>';d.appendChild(el);` +
     `if(cd.raw){el.querySelector('.num').textContent=cd.n;}else{countUp(el.querySelector('.num'),cd.n);}});` +
     `var segs=STATUS.filter(function(st){return s.funnel[st]>0}).map(function(st){return{label:SLABEL[st],value:s.funnel[st],color:SCOLOR[st]}});` +
-    `donut(document.getElementById('donut'),segs.length?segs:[{label:'空',value:1,color:'#27272a'}],{value:s.total||0,text:'线索'});` +
+    `var totalLeads=STATUS.reduce(function(sum,st){return sum+(s.funnel[st]||0)},0);` +
+    `donut(document.getElementById('donut'),segs.length?segs:[{label:'空',value:1,color:'#27272a'}],{value:totalLeads,text:'线索'});` +
     `document.getElementById('donutLegend').innerHTML=segs.map(function(seg){return '<span><i style="background:'+seg.color+'"></i>'+esc(seg.label)+' '+seg.value+'</span>'}).join('')||'<span class="dim">暂无线索</span>';` +
     `funnel(document.getElementById('funnel'),[` +
     `{label:'触达',value:s.conversion.contactedTotal,color:'linear-gradient(90deg,#6366f1,#818cf8)'},` +
@@ -627,14 +628,14 @@ function crmPage() {
     `function openCalc(){` +
     `modal('<h3 style="margin:0 0 14px">定价计算器 <span class="dim" style="font-size:12px;font-weight:400">Incoterms 2020 叠加</span></h3>' +` +
     `'<div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">' +` +
-    `['exw|出厂成本','inland|国内运费','port|港口/报关费','ocean|海运费','insurance_rate|保险率%','dest|目的港清关费','dest_freight|目的地运费','margin|利润率%'].map(function(f){` +
+    `['exw|出厂成本','inland|国内运费','port|港口/报关费','ocean|海运费','insurance_rate|保险率%','duty_rate|关税+增值税%(基于CIF)','dest|目的港清关费','dest_freight|目的地运费','margin|利润率%'].map(function(f){` +
     `var p=f.split('|');return '<div class="field"><label>'+p[1]+'</label><input type="number" id="pc-'+p[0]+'" value="0" oninput="calcLive()"></div>'}).join('') +` +
     `'<div class="field"><label>口径</label><select id="pc-mode" onchange="calcLive()"><option value="total">整批金额</option><option value="unit">单件成本</option></select></div>' +` +
     `'<div class="field"><label>数量</label><input type="number" id="pc-qty" value="1000" oninput="calcLive()"></div></div>' +` +
     `'<div id="pcOut" class="mt"></div>',` +
     `function(box){calcLive();});}` +
     `function calcLive(){var g=function(k){return Number((document.getElementById('pc-'+k)||{}).value)||0};` +
-    `var body={mode:document.getElementById('pc-mode').value,qty:g('qty'),exw:g('exw'),inland:g('inland'),port:g('port'),ocean:g('ocean'),insurance_rate:g('insurance_rate'),dest:g('dest'),dest_freight:g('dest_freight'),margin:g('margin')};` +
+    `var body={mode:document.getElementById('pc-mode').value,qty:g('qty'),exw:g('exw'),inland:g('inland'),port:g('port'),ocean:g('ocean'),insurance_rate:g('insurance_rate'),duty_rate:g('duty_rate'),dest:g('dest'),dest_freight:g('dest_freight'),margin:g('margin')};` +
     `api('api/calc/price',{method:'POST',body:JSON.stringify(body)})` +
     `.then(function(r){if(!r.ok)return;var c=r.j;` +
     `document.getElementById('pcOut').innerHTML=` +

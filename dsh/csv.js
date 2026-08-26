@@ -94,9 +94,9 @@ function splitName(name) {
   return { first: parts[0], last: parts[parts.length - 1] };
 }
 
-/** CRM 线索 → 发信工具导入行。 */
+/** CRM 线索 → 发信工具导入行。CRM 不存联系人姓名，first/last 留空（工具端会用公司名兜底）。 */
 export function importerRowFromLead(lead) {
-  const name = splitName(lead.contacts?.person || lead.company);
+  const name = splitName(lead.contacts?.person || '');
   return {
     email: lead.contacts?.emails?.[0] ?? '',
     first_name: name.first,

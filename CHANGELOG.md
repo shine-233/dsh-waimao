@@ -2,7 +2,14 @@
 
 ## 0.7.2 (2026-08-26)
 
-补齐 XMT 导航栏最后一块 + GitHub 仓库治理。
+补齐 XMT 导航栏最后一块 + GitHub 仓库治理 + 第二轮逐字审计修复。
+
+### 第二轮审计修复
+- **网页定价计算器漏关税**：pricing.js 已支持 duty_rate（DDP 必填），但计算器弹窗没有这个输入框，网页算出的 DDP 报价永远漏掉关税——正是工具描述里警告的坑。已补输入框
+- **管线页环形图中心恒为 0**：引用了 stats 接口不存在的 `s.total` 字段 → 改为 funnel 求和
+- **Day7 跟进邮件虚假声称附件**：主题写 "catalog attached"、正文写 "Attaching our catalog"，但序列发送从不带附件——买家会找一封不存在的附件。改为"目录已备好，回复即发"
+- **Instantly/CSV 导出拿公司名拆词冒充人名**：`contacts.person` 字段在 CRM schema 里不存在，first_name 会变成公司名第一个词（垃圾数据）。改为留空，模板用 {{company_name}} 称呼
+- `email_sequence_start` 描述同步实际实现（A/B 分组是按线索 ID 哈希，不是交替分配）
 
 ### 新增
 - **模板页**（第 5 个网页 `/waimao/templates`，对照 XMT 导航的「报价模板」）：

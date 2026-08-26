@@ -95,11 +95,11 @@ export const FOLLOW_UPS = [
   },
   {
     day: 7,
-    subject: (p) => `${p} — catalog + price list attached`,
+    subject: (p) => `${p} — catalog + price list ready`,
     body: {
-      en: (c) => `Hi ${c.name || 'there'},\n\nAttaching our catalog. If ${c.product} is not your line, happy to refer you to someone who buys from us regularly.\n\nBest,\n${c.me}`,
-      es: (c) => `Hola ${c.name || 'que tal'},\n\nAdjunto nuestro catálogo. Si ${c.product} no es su rubro, con gusto le referimos a alguien que nos compra habitualmente.\n\nSaludos,\n${c.me}`,
-      pt: (c) => `Olá ${c.name || 'tudo bem'},\n\nSegue nosso catálogo. Se ${c.product} não é o seu segmento, com prazer indicamos alguém que compra de nós regularmente.\n\nAtenciosamente,\n${c.me}`,
+      en: (c) => `Hi ${c.name || 'there'},\n\nCatalog and FOB price list are ready to send — reply "catalog" and I'll pass them over. If ${c.product} is not your line, happy to refer you to someone who buys from us regularly.\n\nBest,\n${c.me}`,
+      es: (c) => `Hola ${c.name || 'que tal'},\n\nEl catálogo y los precios FOB están listos — responda "catálogo" y se los envío de inmediato. Si ${c.product} no es su rubro, con gusto le referimos a alguien que nos compra habitualmente.\n\nSaludos,\n${c.me}`,
+      pt: (c) => `Olá ${c.name || 'tudo bem'},\n\nO catálogo e a lista de preços FOB estão prontos — responda "catálogo" que eu envio na hora. Se ${c.product} não é o seu segmento, com prazer indicamos alguém que compra de nós regularmente.\n\nAtenciosamente,\n${c.me}`,
     },
   },
   {

@@ -612,7 +612,7 @@ function registerSequenceStartTool(ctx) {
   ctx.tools.register({
     name: 'email_sequence_start',
     description:
-      '给线索启动 Day 0/3/7/14 四步跟进序列（首封+轻提醒+附目录+最后跟进）。回复即停（状态改 replied 时自动停）。由 cron 定时执行，受 smtp.dry_run 约束。传 template_a/template_b 可做 A/B 测试（多线索时交替分配变体，stats_report 按变体统计回复率）。',
+      '给线索启动 Day 0/3/7/14 四步跟进序列（首封+轻提醒+附目录+最后跟进）。回复即停（状态改 replied 时自动停）。由 cron 定时执行，受 smtp.dry_run 约束。传 template_a/template_b 可做 A/B 测试（按线索 ID 稳定分组，逐条/批量结果一致，stats_report 按变体统计回复率）。',
     parameters: {
       type: 'object',
       properties: {
