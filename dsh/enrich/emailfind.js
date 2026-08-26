@@ -8,18 +8,28 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { promises as dns } from 'node:dns';
 
+// 姓名模式 20 个 + 角色地址 15 个 = 35+ 候选（hunter.io 常用模式子集）
 const PATTERNS = [
-  (f, l) => `${f}`,
-  (f, l) => `${f}.${l}`,
-  (f, l) => `${f[0]}${l}`,
-  (f, l) => `${f}${l[0] ?? ''}`,
-  (f, l) => `${f[0]}.${l}`,
-  (f, l) => `${f}_${l}`,
-  (f, l) => `${f}-${l}`,
-  (f, l) => `${f}${l}`,
-  (f, l) => `${l}.${f}`,
-  (f, l) => `${l}${f}`,
-  (f, l) => `${f}.${l[0] ?? ''}`,
+  (f, l) => `${f}`,              // john
+  (f, l) => `${f}.${l}`,         // john.smith
+  (f, l) => `${f}${l}`,          // johnsmith
+  (f, l) => `${f[0]}${l}`,       // jsmith
+  (f, l) => `${f[0]}.${l}`,      // j.smith
+  (f, l) => `${f}_${l}`,         // john_smith
+  (f, l) => `${f}-${l}`,         // john-smith
+  (f, l) => `${f}${l[0] ?? ''}`, // johns
+  (f, l) => `${f}.${l[0] ?? ''}`,// john.s
+  (f, l) => `${l}`,              // smith
+  (f, l) => `${l}.${f}`,         // smith.john
+  (f, l) => `${l}${f}`,          // smithjohn
+  (f, l) => `${l[0]}${f}`,       // sjohn
+  (f, l) => `${l}.${f[0] ?? ''}`,// smith.j
+  (f, l) => `${l}_${f}`,         // smith_john
+  (f, l) => `${l}-${f}`,         // smith-john
+  (f, l) => `${f[0]}${l[0] ?? ''}`,   // js
+  (f, l) => `${f[0]}.${l[0] ?? ''}`,  // j.s
+  (f, l) => `${f}${l[0] ?? ''}${f[0]}`, // johnsj (少见但存在)
+  (f, l) => `${l}${f[0] ?? ''}.${f}`,   // sj.john
 ];
 
 export function guessEmails({ name, domain }) {
@@ -27,7 +37,7 @@ export function guessEmails({ name, domain }) {
   if (!cleanDomain || !cleanDomain.includes('.')) {
     return [];
   }
-  const role = ['info', 'sales', 'contact', 'purchasing', 'sourcing', 'import', 'buy', 'hello', 'office'];
+  const role = ['info', 'sales', 'contact', 'purchasing', 'sourcing', 'import', 'export', 'buy', 'buyer', 'hello', 'office', 'trade', 'admin', 'support', 'marketing'];
   if (!name || !String(name).trim()) {
     return [...role.map((r) => `${r}@${cleanDomain}`)];
   }
@@ -62,18 +72,15 @@ function smtpCommand(socket, expected, command, stepTimeout = 15_000) {
     }, stepTimeout);
     const onData = (chunk) => {
       buffer += chunk.toString('utf8');
-      // 多行回复以 "250-" 续行，"250 " 结束
       const lines = buffer.split(/\r?\n/);
-      const last = lines[lines.length - 2] ?? '';
-      if (/^\d{3}[- ]/.test(last) || /^\d{3}$/.test(last.trim())) {
-        const code = Number(last.slice(0, 3));
-        if (code >= 200 && code < 400 ? expected.includes(code) : expected.includes(code)) {
-          cleanup();
-          resolve({ code, message: buffer.trim() });
-        } else {
-          cleanup();
-          resolve({ code, message: buffer.trim() });
-        }
+      // 多行回复以 "250-" 续行；只有 "250 "（空格）才是终止行。
+      // 在续行就提前返回会与服务器剩余输出交错，后续回包全部错位。
+      // 取最后一个终止行（缓冲里可能已有整条回复）
+      const completeLines = lines.slice(0, -1);
+      const finalLine = [...completeLines].reverse().find((line) => /^\d{3} /.test(line));
+      if (finalLine) {
+        cleanup();
+        resolve({ code: Number(finalLine.slice(0, 3)), message: buffer.trim() });
       }
     };
     function cleanup() {
@@ -118,7 +125,8 @@ function upgradeTls(socket, host) {
 async function withSmtp(mxHost, fromEmail, handler, { securePort, starttls }) {
   let socket = await connect(mxHost, securePort ?? 25, securePort === 465);
   try {
-    const ehlo = async (name = 'waimao.local') => {
+    // 地址字面量作 HELO 名，所有服务器都接受；裸域名 waimao.local 反而可疑
+    const ehlo = async (name = '[127.0.0.1]') => {
       const res = await smtpCommand(socket, [250], `EHLO ${name}`);
       return res.message;
     };
@@ -138,9 +146,23 @@ async function withSmtp(mxHost, fromEmail, handler, { securePort, starttls }) {
   }
 }
 
+/** RCPT 结果分类：accepted=存在 / rejected=确定不存在 / temporary=灰名单限流，不可下结论。 */
+export function classifyRcpt(code) {
+  if (code === 250 || code === 251) {
+    return 'accepted';
+  }
+  if (code >= 500) {
+    return 'rejected';
+  }
+  if (code >= 400) {
+    return 'temporary';
+  }
+  return 'unexpected';
+}
+
 /**
  * 验证单个邮箱。结果：
- *  valid / invalid / catch-all / unverifiable(25端口不可达等) / no-mx / no-dns
+ *  valid / invalid / catch-all / unverifiable(25端口不可达、4xx临时失败等) / no-mx / no-dns
  */
 export async function verifyEmail(email, opts = {}) {
   const domain = email.split('@')[1];
@@ -158,7 +180,9 @@ export async function verifyEmail(email, opts = {}) {
   if (!mxHost) {
     return { email, status: 'no-mx', reason: 'empty MX' };
   }
-  const fromEmail = opts.fromEmail ?? 'verify@waimao.local';
+  // 默认用空发件人 <>：探测用途下被普遍接受；.local 假域常被直接拒
+  const fromEmail = opts.fromEmail ?? '';
+  const mailFrom = fromEmail ? `<${fromEmail}>` : '<>';
   const ports = opts.port ? [opts.port] : [25, 587];
   let lastError = null;
   for (const port of ports) {
@@ -167,15 +191,23 @@ export async function verifyEmail(email, opts = {}) {
         mxHost,
         fromEmail,
         async (socket) => {
-          await smtpCommand(socket, [250], `MAIL FROM:<${fromEmail}>`);
+          const mail = await smtpCommand(socket, [250], `MAIL FROM:${mailFrom}`);
+          if (Math.floor(mail.code / 100) !== 2) {
+            return { email, status: 'unverifiable', reason: `MAIL FROM rejected (${mail.code}) — 无法探测`, mx: mxHost };
+          }
           const rcpt = await smtpCommand(socket, [250, 251, 550, 551, 553, 554], `RCPT TO:<${email}>`);
-          if (rcpt.code === 250 || rcpt.code === 251) {
+          const verdict = classifyRcpt(rcpt.code);
+          if (verdict === 'accepted') {
             // 再探一个几乎必然不存在的地址判断 catch-all
             const probe = await smtpCommand(socket, [250, 251, 550, 551, 553, 554], `RCPT TO:<no-such-user-${Date.now()}@${domain}>`);
-            if (probe.code === 250 || probe.code === 251) {
+            if (classifyRcpt(probe.code) === 'accepted') {
               return { email, status: 'catch-all', reason: 'server accepts any address (result unreliable)', mx: mxHost };
             }
             return { email, status: 'valid', reason: rcpt.message.split('\n').pop(), mx: mxHost };
+          }
+          if (verdict === 'temporary') {
+            // 灰名单/限流：4xx 说明服务器暂时不表态，判成 invalid 会误杀真实线索
+            return { email, status: 'unverifiable', reason: `temporary failure (${rcpt.code})，稍后可重试`, mx: mxHost };
           }
           return { email, status: 'invalid', reason: (rcpt.message.split('\n').pop() ?? '').slice(0, 120), mx: mxHost };
         },

@@ -21,6 +21,7 @@ import * as kbMod from './kb.js';
 import * as leadsMod from './leads.js';
 import { imapProbe } from './mail/imap.js';
 import * as composeMod from './mail/compose.js';
+import { followUp, languageFor } from './mail/templates.js';
 import { newSequence, dueSteps, sequenceSummary, stopSequence } from './mail/sequence.js';
 import { scanReplies } from './mail/replies.js';
 import { sendMail } from './mail/smtp.js';
@@ -194,6 +195,33 @@ async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId
   return { dryRun: false, trackId: tracking?.id ?? null, ...result };
 }
 
+/** A/B 分组：按线索 ID 稳定哈希，逐条/批量调用分组一致且大致对半。 */
+export function abVariant(id) {
+  const s = String(id ?? '');
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return h % 2 === 0 ? 'A' : 'B';
+}
+
+/** 填充序列 Day3/7/14 跟进内容（模板兜底）：cron 到期直接发步骤里存的内容，绝不允许空邮件。 */
+export function fillFollowUpSteps(sequence, { market, language }) {
+  const config = readConfig();
+  for (let n = 1; n <= Math.min(3, sequence.steps.length - 1); n += 1) {
+    if (sequence.steps[n].subject && sequence.steps[n].body) {
+      continue;
+    }
+    const fu = followUp(
+      { market, language, product: config.icp?.product || undefined, me: config.smtp?.fromName ?? 'Sales' },
+      n,
+    );
+    sequence.steps[n].subject = fu.subject;
+    sequence.steps[n].body = fu.body;
+  }
+  return sequence;
+}
+
 /* ------------------------------------------------------------------ */
 /* 工具：搜索 + 线索加工                                                */
 /* ------------------------------------------------------------------ */
@@ -329,7 +357,10 @@ function registerLeadScoreTool(ctx) {
     async execute(args) {
       const ids = Array.isArray(args?.lead_ids) && args.lead_ids.length > 0
         ? args.lead_ids
-        : crmMod.listLeads({ status: 'new', limit: 50 }).map((lead) => lead.id);
+        : [
+            ...crmMod.listLeads({ status: 'new', limit: 50 }).map((lead) => lead.id),
+            ...crmMod.listLeads({ status: 'qualified', limit: 50 }).map((lead) => lead.id),
+          ];
       const results = [];
       for (const id of ids) {
         const lead = crmMod.getLead(id);
@@ -474,7 +505,7 @@ function registerEmailSendTool(ctx) {
   ctx.tools.register({
     name: 'email_send',
     description:
-      '发送开发信。受 smtp.dry_run 总闸约束（默认 true 只存预览不发送）。SOP 任务中发送需草稿已批准（哈希校验）。发送后自动记 CRM 活动，replied 前状态改为 contacted。',
+      '发送开发信。受 smtp.dry_run 总闸约束（默认 true 只存预览不发送）与 smtp.dailyCap 日上限约束。SOP 任务中发送需草稿已批准，且实际发送内容以已批准草稿为准（哈希绑定，参数内容会被忽略）。发送后自动记 CRM 活动，replied 前状态改为 contacted。',
     parameters: {
       type: 'object',
       properties: {
@@ -494,8 +525,17 @@ function registerEmailSendTool(ctx) {
       if (!lead) {
         throw new Error(`lead not found: ${args?.lead_id}`);
       }
+      // SOP 模式：发送内容以"已批准草稿"为准（哈希校验），参数里的 subject/body
+      // 只在无 SOP 时生效——防止审批后被偷换内容。
+      let finalSubject = String(args?.subject ?? '');
+      let finalBody = String(args?.body ?? '');
       if (args?.task_id && args?.draft_id) {
-        sopMod.assertApproved(args.task_id, args.draft_id);
+        const sopDraft = sopMod.assertApproved(args.task_id, args.draft_id);
+        if (sopDraft.leadId && sopDraft.leadId !== lead.id) {
+          throw new Error(`草稿 ${args.draft_id} 属于线索 ${sopDraft.leadId}，与 lead_id ${lead.id} 不匹配`);
+        }
+        finalSubject = sopDraft.subject;
+        finalBody = sopDraft.body;
       }
       const to = lead.contacts.emails?.[0];
       if (!to) {
@@ -505,8 +545,8 @@ function registerEmailSendTool(ctx) {
       const result = await sendEmailGuarded({
         to,
         toName: lead.company,
-        subject: String(args?.subject ?? ''),
-        body: String(args?.body ?? ''),
+        subject: finalSubject,
+        body: finalBody,
         leadId: lead.id,
         // 跟进邮件挂原线程（回复检测依赖 In-Reply-To）
         inReplyTo: lead.lastMessageId,
@@ -516,9 +556,9 @@ function registerEmailSendTool(ctx) {
         crmMod.updateLead(lead.id, {
           status: ['new', 'qualified'].includes(lead.status) ? 'contacted' : lead.status,
           ...(result.messageId ? { lastMessageId: result.messageId } : {}),
-        }, { activityNote: `开发信已发送${isFirstEmail ? '(首封)' : '(跟进)'}: ${args?.subject}` });
+        }, { activityNote: `开发信已发送${isFirstEmail ? '(首封)' : '(跟进)'}: ${finalSubject}` });
       } else {
-        crmMod.addActivity(lead.id, { type: 'email-draft', note: `[dry-run] 预览: ${args?.subject}` });
+        crmMod.addActivity(lead.id, { type: 'email-draft', note: `[dry-run] 预览: ${finalSubject}` });
       }
       return { ...result, to };
     },
@@ -547,7 +587,6 @@ function registerSequenceStartTool(ctx) {
       const ids = Array.isArray(args?.lead_ids) && args.lead_ids.length > 0 ? args.lead_ids : [args?.lead_id];
       const abMode = Boolean(args?.template_a && args?.template_b);
       const results = [];
-      let variantCounter = 0;
       for (const id of ids.filter(Boolean)) {
         try {
           const lead = crmMod.getLead(String(id));
@@ -559,21 +598,22 @@ function registerSequenceStartTool(ctx) {
             results.push({ id, error: 'no email' });
             continue;
           }
-          const language = args?.language ?? (String(lead.market).match(/^(mx|br|ar|cl|co|pe)$/) ? 'es' : 'en');
-          const variant = abMode ? (variantCounter % 2 === 0 ? 'A' : 'B') : null;
-          variantCounter += 1;
+          const language = args?.language ?? languageFor(lead.market);
+          const variant = abMode ? abVariant(lead.id) : null;
           const templateId = variant === 'A' ? args.template_a : variant === 'B' ? args.template_b : null;
           const template = templateId ? templatesMod.getTemplate(String(templateId)) : null;
+          const icp = readConfig().icp ?? {};
           const sequence = newSequence({ language });
           let first;
           if (template) {
             templatesMod.markUsed(template.id);
             first = { subject: template.subject, body: template.body, generatedBy: `template:${template.name}` };
           } else {
-            first = await composeMod.composeEmail({ kind: 'first', company: lead.company || lead.domain, market: lead.market, language, useAI: args?.use_ai, me: readConfig().smtp?.fromName ?? 'Sales' });
+            first = await composeMod.composeEmail({ kind: 'first', company: lead.company || lead.domain, market: lead.market, language, useAI: args?.use_ai, me: readConfig().smtp?.fromName ?? 'Sales', product: icp.product || undefined, buyers: icp.buyers || undefined });
           }
           sequence.steps[0].subject = first.subject;
           sequence.steps[0].body = first.body;
+          fillFollowUpSteps(sequence, { market: lead.market, language });
           sequence.variant = variant;
           crmMod.updateLead(lead.id, { sequence }, { activityNote: `启动4步跟进序列${variant ? ` [变体${variant}]` : ''}` });
           results.push({ id, variant, firstSubject: first.subject });
@@ -1218,6 +1258,7 @@ function registerPriceCalcTool(ctx) {
         port: { type: 'number', description: '港口/报关费' },
         ocean: { type: 'number', description: '海运费' },
         insurance_rate: { type: 'number', description: '保险费率%（基于CFR），默认0' },
+        duty_rate: { type: 'number', description: '目的国关税+增值税综合税率%（基于CIF，DDP 报价必填，漏报会严重低估）' },
         dest: { type: 'number', description: '目的港清关费(DDP用)' },
         dest_freight: { type: 'number', description: '目的地运费(DDP用)' },
         margin: { type: 'number', description: '利润率%（如25）' },
@@ -1231,7 +1272,7 @@ function registerPriceCalcTool(ctx) {
     async execute(args) {
       const calc = calcPrice({
         mode: args?.mode, exw: args?.exw, inland: args?.inland, port: args?.port,
-        ocean: args?.ocean, insuranceRate: args?.insurance_rate, dest: args?.dest,
+        ocean: args?.ocean, insuranceRate: args?.insurance_rate, dutyRate: args?.duty_rate, dest: args?.dest,
         destFreight: args?.dest_freight, margin: args?.margin, qty: args?.qty,
       });
       return { ...calc, quoteText: quoteLines(calc).join('\n') };
@@ -1392,15 +1433,28 @@ function registerDataBackupTool(ctx) {
       };
       const { homedir } = await import('node:os');
       const home = homedir();
+      const data = (name) => read(join(home, '.waimao', 'data', name));
+      // 审计日志尾部（JSONL 只取最后 200 行，避免备份无限膨胀）
+      let auditTail = null;
+      try {
+        auditTail = data('audit.jsonl')?.split?.('\n').filter(Boolean).slice(-200) ?? null;
+      } catch {}
       const bundle = {
         exportedAt: new Date().toISOString(),
-        version: '0.6.0',
-        crm: read(join(home, '.waimao', 'data', 'crm.json')),
-        leads: read(join(home, '.waimao', 'data', 'leads.jsonl'))?.split?.('\n').filter(Boolean) ?? null,
-        kb: read(join(home, '.waimao', 'data', 'kb.json')),
-        templates: read(join(home, '.waimao', 'data', 'templates.json')),
-        messages: read(join(home, '.waimao', 'data', 'messages.json')),
-        suppress: read(join(home, '.waimao', 'data', 'suppress.json')),
+        version: '0.7.1',
+        crm: data('crm.json'),
+        leads: data('leads.jsonl')?.split?.('\n').filter(Boolean) ?? null,
+        kb: data('kb.json'),
+        templates: data('templates.json'),
+        messages: data('messages.json'),
+        suppress: data('suppress.json'),
+        sop: data('sop.json'),
+        monitor: data('monitor.json'),
+        tracking: data('tracking.json'),
+        warmup: data('warmup.json'),
+        broadcast: data('broadcast.json'),
+        cronState: data('cron.json'),
+        auditTail,
       };
       const file = join(EXPORT_DIR, `backup-${new Date().toISOString().slice(0, 10)}.json`);
       mkdirSync(EXPORT_DIR, { recursive: true });
@@ -1759,6 +1813,26 @@ function registerRoutes(scope) {
     route(`waimao-test-${engine}`, 'exact', `/waimao/api/test/${engine}`, testHandler);
   }
 
+  // WhatsApp 扫码接入（Evolution 实例配对）
+  route('waimao-evolution-connect', 'exact', '/waimao/api/evolution/connect', async (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    try {
+      const result = await evolutionMod.connectInstance();
+      auditMod.audit('wa.connect', { connected: result.connected }, 'user');
+      httpMod.sendJson(res, 200, result);
+    } catch (error) {
+      httpMod.sendJson(res, 200, { connected: false, error: String(error?.message ?? error).slice(0, 300) });
+    }
+  });
+  route('waimao-evolution-state', 'exact', '/waimao/api/evolution/state', async (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    try {
+      httpMod.sendJson(res, 200, await evolutionMod.connectionState());
+    } catch (error) {
+      httpMod.sendJson(res, 200, { connected: false, state: 'unknown', error: String(error?.message ?? error).slice(0, 200) });
+    }
+  });
+
   // 线索加工
   route('waimao-leads-search', 'exact', '/waimao/api/leads/search', async (req, res) => {
     if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
@@ -1816,6 +1890,8 @@ function registerRoutes(scope) {
     httpMod.sendJson(res, 200, leads.map((lead) => ({
       id: lead.id, company: lead.company || lead.domain, domain: lead.domain, market: lead.market,
       status: lead.status, score: lead.score, tier: lead.tier, advice: lead.advice,
+      fit: lead.fit ?? null,
+      lastReply: lead.lastReply ?? null,
       contacts: lead.contacts, sequence: lead.sequence ? sequenceSummary(lead.sequence) : null,
       activities: (lead.activities ?? []).slice(-3),
     })));
@@ -1859,6 +1935,8 @@ function registerRoutes(scope) {
       const draft = await composeMod.composeEmail({
         kind: 'first', company: lead.company || lead.domain, market: lead.market,
         me: readConfig().smtp?.fromName ?? 'Sales',
+        product: readConfig().icp?.product || undefined,
+        buyers: readConfig().icp?.buyers || undefined,
         knowledge: kbMod.contextFor(`${lead.market} 报价 产品`) || undefined,
       });
       crmMod.updateLead(lead.id, { pendingEmail: draft }, { activityNote: `网页生成开发信草稿(${draft.generatedBy})`, actor: 'user' });
@@ -1895,11 +1973,12 @@ function registerRoutes(scope) {
       const lead = crmMod.getLead(String(body.id ?? ''));
       if (!lead) { httpMod.sendJson(res, 404, { error: 'lead not found' }); return; }
       if (!lead.contacts.emails?.length) { httpMod.sendJson(res, 400, { error: '该线索没有邮箱' }); return; }
-      const language = String(lead.market).match(/^(mx|br|ar|cl|co|pe)$/) ? 'es' : 'en';
+      const language = languageFor(lead.market);
       const sequence = newSequence({ language });
-      const first = await composeMod.composeEmail({ kind: 'first', company: lead.company || lead.domain, market: lead.market, language, me: readConfig().smtp?.fromName ?? 'Sales' });
+      const first = await composeMod.composeEmail({ kind: 'first', company: lead.company || lead.domain, market: lead.market, language, me: readConfig().smtp?.fromName ?? 'Sales', product: readConfig().icp?.product || undefined, buyers: readConfig().icp?.buyers || undefined });
       sequence.steps[0].subject = first.subject;
       sequence.steps[0].body = first.body;
+      fillFollowUpSteps(sequence, { market: lead.market, language });
       crmMod.updateLead(lead.id, { sequence }, { activityNote: '网页启动4步跟进序列', actor: 'user' });
       httpMod.sendJson(res, 200, { ok: true, language, firstSubject: first.subject });
     } catch (error) {
@@ -1963,7 +2042,7 @@ function registerRoutes(scope) {
       const body = await httpMod.readBody(req);
       httpMod.sendJson(res, 200, calcPrice({
         mode: body.mode, exw: body.exw, inland: body.inland, port: body.port,
-        ocean: body.ocean, insuranceRate: body.insurance_rate, dest: body.dest,
+        ocean: body.ocean, insuranceRate: body.insurance_rate, dutyRate: body.duty_rate, dest: body.dest,
         destFreight: body.dest_freight, margin: body.margin, qty: body.qty,
       }));
     } catch (error) {
@@ -2093,7 +2172,7 @@ function startCron() {
     everyMs: Math.max(5, config.cron?.sequenceCheckEveryMin ?? 60) * 60_000,
     description: '邮件跟进序列到期执行(Day0/3/7/14)',
     fn: cronMod.createSequenceJob({
-      sendEmail: async ({ lead, to, subject, body }) => sendEmailGuarded({ to, toName: lead.company, subject, body, leadId: lead.id, actor: 'cron' }),
+      sendEmail: async ({ lead, to, subject, body, inReplyTo, isFirstEmail }) => sendEmailGuarded({ to, toName: lead.company, subject, body, leadId: lead.id, actor: 'cron', inReplyTo, isFirstEmail }),
     }),
   });
   const waMin = config.cron?.waSyncEveryMin ?? 30;
@@ -2116,11 +2195,12 @@ function startCron() {
     everyMs: 30 * 60_000,
     description: '每日管线日报',
     fn: async () => {
-      const target = String(config.cron?.dailyReportAt ?? '09:00');
-      const now = new Date();
-      const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-      if (hhmm < target || hhmm >= `${target.slice(0, 3)}30`) {
-        return `not due (${hhmm} vs ${target})`;
+      // 归一化解析 HH:mm，容忍 "9:00" 这类不补零写法
+      const [hh, mm] = String(config.cron?.dailyReportAt ?? '09:00').split(':').map((part) => Number.parseInt(part, 10) || 0);
+      const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+      const targetMin = hh * 60 + mm;
+      if (nowMin < targetMin || nowMin >= targetMin + 30) {
+        return `not due (${nowMin} min vs ${targetMin})`;
       }
       return cronMod.dailyReportJob();
     },

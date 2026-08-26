@@ -49,13 +49,16 @@ export function report() {
   // 触达量（审计）
   const emailSent = queryAudit({ action: 'email.send', limit: 1000 }).length;
   const emailDryRun = queryAudit({ action: 'email.dry_run', limit: 1000 }).length;
-  const waSent = queryAudit({ action: 'wa.send', limit: 1000 }).length;
+  const waSentDirect = queryAudit({ action: 'wa.send', limit: 1000 }).length;
+  const waSentBroadcast = queryAudit({ action: 'wa.broadcast.send', limit: 1000 }).length;
+  const waSent = waSentDirect + waSentBroadcast;
 
   // 序列进行中 + A/B 变体对比
   const sequencesRunning = leads.filter((lead) => lead.sequence && lead.sequence.steps?.some((step) => step.status === 'pending')).length;
   const abTest = {};
   for (const lead of leads) {
-    if (lead.sequence?.variant && ['contacted', 'replied', 'quoted'].includes(lead.status)) {
+    // won 也算"已触达过"：漏掉它会导致回复率算出 >100%
+    if (lead.sequence?.variant && ['contacted', 'replied', 'quoted', 'won'].includes(lead.status)) {
       const variant = lead.sequence.variant;
       abTest[variant] = abTest[variant] || { contacted: 0, replied: 0 };
       abTest[variant].contacted += 1;
@@ -83,7 +86,7 @@ export function report() {
     byMarket,
     replyCategories,
     abTest,
-    outreach: { emailSent, emailDryRun, waSent, sequencesRunning },
+    outreach: { emailSent, emailDryRun, waSent, waBroadcast: waSentBroadcast, sequencesRunning },
     tracking: trackStats(),
     suppressed: suppressStats().total,
     hint: '回复率低(<5%)时：换模板/换分层/换市场；极高分层回复率应显著高于低分层，否则评分标准需要校准；打开率高但回复低=内容问题，打开率低=送达率/标题问题',

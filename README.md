@@ -9,7 +9,7 @@
    → CRM管线 → 官网监控(意图信号) → 报价PDF → 结案复盘 → 效果统计
 ```
 
-## 功能总览（49 个对话工具 + 4 个网页）
+## 功能总览（48 个对话工具 + 4 个网页）
 
 | 模块 | 能力 |
 |---|---|
@@ -31,7 +31,7 @@
 | 📄 **报价** | 英文报价单 PDF（零依赖手写生成）、自动关联CRM |
 | 📈 **效果统计** | 漏斗转化、分层回复率、市场分布、回复分类、触达量、**打开率/点击率** |
 | 📬 **打开/点击追踪** | 发信自动注入像素+链接包裹（HTML替身），公网反代模式，防开放重定向 |
-| 🔥 **邮箱预热** | 爬坡闸门（第1周5封/天，每周+5）+ 主账号↔伙伴账号自动互动（互发/回复/标星） |
+| 🔥 **邮箱预热** | 预热爬坡限额（第1周5封/天，每周+5，对预热线强制）+ 主账号↔伙伴账号自动互动（互发/回复/标星）；业务发送由 smtp.dailyCap 单独保护 |
 | 🩺 **送达率体检** | SPF/DKIM/DMARC/MX DNS检查 + 修复建议，首封开发信前必跑 |
 
 ## 安装
@@ -83,7 +83,8 @@ npx -y @deepseek-ai/dsh plugin --profile web add github:shine-233/dsh-waimao
     "user": "", "pass": "", "from": "", "fromName": "Sales",
     "dryRun": true,         // ⚠️ 总闸：确认能跑通后再改 false
     "dailyCap": 300,        // 每日真实发送上限，新域名建议 20-30
-    "plainText": false      // 纯文本模式：不注入追踪，投递率更好
+    "plainText": false,     // 纯文本模式：不注入追踪，投递率更好
+    "sendWindow": true      // 序列发送时间窗：收件人当地时间 9-19 点之外顺延
   },
   "cron": { "enabled": true, "waSyncEveryMin": 30, "sequenceCheckEveryMin": 60, "dailyReportAt": "09:00", "staleDays": 7 },
   "wa": { "dailyBroadcastCap": 200, "minDelaySec": 20, "maxDelaySec": 90 },
@@ -114,7 +115,7 @@ cloudflared tunnel --url http://127.0.0.1:3080
 }
 ```
 
-cron 每天自动跑一轮互动（主账号↔伙伴账号互发+自动回复+标星），爬坡第1周限5封/天、每周+5。发信前先 `deliverability_check` 体检 SPF/DKIM/DMARC。
+cron 每天自动跑一轮互动（主账号↔伙伴账号互发+自动回复+标星），预热爬坡第1周限5封/天、每周+5；smtp.dry_run=true 时预热同样不真实发送。发信前先 `deliverability_check` 体检 SPF/DKIM/DMARC。
 
 ## 安全设计
 

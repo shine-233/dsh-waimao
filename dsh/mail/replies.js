@@ -5,7 +5,7 @@ import { readConfig } from '../config.js';
 import * as crm from '../crm.js';
 import * as suppress from '../suppress.js';
 import { stopSequence } from './sequence.js';
-import { imapLogin, imapSelect, imapSearchFrom, imapFetchMessage, imapLogout } from './imap.js';
+import { imapLogin, imapSelect, imapSearch, imapSearchFrom, imapFetchMessage, imapLogout, imapDate } from './imap.js';
 import { audit } from '../audit.js';
 
 const RULES = [
@@ -13,11 +13,18 @@ const RULES = [
   { category: 'unsubscribe', re: /\bunsubscribe\b|\bopt[- ]?out\b|don'?t (want|contact)|remove me|退订|不要再联系/i },
   { category: 'not-interested', re: /not interested|no thanks|we (are )?covered|don'?t need|no need|不感兴趣|暂无需求/i },
   { category: 'ooo', re: /out of (the )?office|annual leave|vacation until|back (on|in) (monday|the office)|自动回复/i },
-  { category: 'auto', re: /\bauto(matic)?[- ]?reply\b|delivery status|undeliverable|mailer-daemon|postmaster@|no-?reply@/i },
+  { category: 'auto', re: /\bauto(matic)?[- ]?reply\b|mailer-daemon|postmaster@|no-?reply@/i },
   { category: 'interested', re: /interested|send (me |us )?(the )?(catalog|price|quotation|quote|sample)|more (info|details)|pricing|moq|lead time|报价|目录|感兴趣/i },
 ];
 
+// 页脚承诺的 "reply STOP/ALTO/PARAR" 退订：正文以关键词开头且极短才算，
+// 避免把 "we will stop ordering" 这类正常商务句子误判成退订
+const SHORT_STOP_RE = /^\s*(?:re\s*:\s*)?(stop|alto|parar)\b[\s!.]{0,10}$/i;
+
 export function classifyReply(text, subject = '') {
+  if (SHORT_STOP_RE.test(String(text ?? '').trim())) {
+    return { category: 'unsubscribe', by: 'rules' };
+  }
   const haystack = `${subject} ${text}`.slice(0, 3000);
   for (const rule of RULES) {
     if (rule.re.test(haystack)) {
@@ -42,8 +49,8 @@ async function aiClassify(text, subject) {
           role: 'system',
           content: [
             '你是外贸销售助理，分类买家回复。只输出 JSON：',
-            '{"category":"interested|pricing|not-interested|ooo|auto|unsubscribe|other","summary":"一句话中文摘要","suggested_action":"一句中文建议"}',
-            'interested=表达兴趣/要看样品/约会议；pricing=询价要目录；not-interested=明确拒绝；ooo=休假自动回复；auto=系统自动邮件；unsubscribe=要求退订。',
+            '{"category":"interested|pricing|not-interested|ooo|auto|unsubscribe|bounce|other","summary":"一句话中文摘要","suggested_action":"一句中文建议"}',
+            'interested=表达兴趣/要看样品/约会议；pricing=询价要目录；not-interested=明确拒绝；ooo=休假自动回复；auto=系统自动邮件；unsubscribe=要求退订；bounce=退信/投递失败通知(地址已失效)。',
           ].join('\n'),
         },
         { role: 'user', content: `Subject: ${subject}\n\n${String(text).slice(0, 2500)}` },
@@ -123,8 +130,10 @@ export async function scanReplies(opts = {}) {
           if (fromAddr !== leadEmail) {
             continue; // 安全：只认发件人精确匹配
           }
-          // 已处理过这封（按 messageId 去重）
-          const seen = (lead.activities ?? []).some((activity) => activity.type === 'reply' && (activity.note ?? '').includes(message.messageId));
+          // 已处理过这封（按 messageId 去重；messageId 为空时绝不能当成"已处理"，
+          // 否则该线索的所有回复会被永久跳过）
+          const messageId = String(message.messageId ?? '').trim();
+          const seen = Boolean(messageId) && (lead.activities ?? []).some((activity) => activity.type === 'reply' && (activity.note ?? '').includes(messageId));
           if (seen) {
             continue;
           }
@@ -141,16 +150,16 @@ export async function scanReplies(opts = {}) {
           const lead2 = crm.getLead(lead.id);
           const sequence = lead2?.sequence ? stopSequence(lead2.sequence, `buyer replied: ${classification.category}`) : undefined;
           crm.updateLead(lead.id, {
-            status: lead.status === 'quoted' ? 'replied' : 'replied',
+            status: 'replied',
             ...(sequence ? { sequence } : {}),
             lastReply: {
-              messageId: message.messageId,
+              messageId,
               category: classification.category,
               summary: classification.summary ?? message.subject,
               ts: message.date || new Date().toISOString(),
             },
           }, {
-            activityNote: `📩 回复[${classification.category}] ${message.messageId} ${(classification.summary ?? message.subject).slice(0, 120)}${classification.suggestedAction ? ` | 建议: ${classification.suggestedAction}` : ''}`,
+            activityNote: `📩 回复[${classification.category}] ${messageId} ${(classification.summary ?? message.subject).slice(0, 120)}${classification.suggestedAction ? ` | 建议: ${classification.suggestedAction}` : ''}`,
           });
           audit('email.reply', { leadId: lead.id, category: classification.category, messageId: message.messageId }, 'cron');
           replies.push({
@@ -164,6 +173,51 @@ export async function scanReplies(opts = {}) {
       } catch (error) {
         errors.push({ leadId: lead.id, error: String(error?.message ?? error).slice(0, 150) });
       }
+    }
+
+    // —— 退信(DSN)扫描：投递失败通知的 From 是 mailer-daemon/postmaster，
+    // 上面的按发件人搜索够不到。单独搜一轮，从正文提取失败地址，
+    // 命中候选线索即进抑制列表（继续发伤域名信誉）。
+    try {
+      const dsnSeqs = await imapSearch(session, `OR FROM "mailer-daemon" FROM "postmaster" SINCE ${imapDate(since)}`);
+      const knownEmails = new Map();
+      for (const lead of candidates) {
+        for (const email of lead.contacts.emails) {
+          knownEmails.set(String(email).toLowerCase(), lead);
+        }
+      }
+      let bounced = 0;
+      for (const seq of dsnSeqs.slice(-10).reverse()) {
+        const message = await imapFetchMessage(session, seq, { maxBody: 4000 });
+        const haystack = `${message.subject} ${message.body}`;
+        if (!/\b(undeliver|delivery status|returned mail|failure|user unknown|address (not found|does not exist)|no longer on server)\b/i.test(haystack)) {
+          continue;
+        }
+        const mentioned = new Set([...haystack.matchAll(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi)].map((m) => m[0].toLowerCase()));
+        for (const addr of mentioned) {
+          const hit = knownEmails.get(addr);
+          if (!hit || suppress.isSuppressed(addr)) {
+            continue;
+          }
+          suppress.suppress(addr, 'hard-bounce', 'cron');
+          crm.addActivity(hit.id, { type: 'bounce', note: `退信(${String(message.subject).slice(0, 80)})，地址已进抑制列表`, actor: 'cron' });
+          const fresh = crm.getLead(hit.id);
+          if (fresh?.sequence && fresh.status !== 'replied') {
+            crm.updateLead(hit.id, { sequence: stopSequence(fresh.sequence, 'hard bounce') });
+          }
+          bounced += 1;
+          replies.push({
+            leadId: hit.id, company: hit.company || hit.domain, from: addr,
+            subject: message.subject, category: 'bounce',
+            summary: '投递失败通知，地址已抑制', bodyPreview: message.body.slice(0, 300),
+          });
+        }
+      }
+      if (bounced > 0) {
+        audit('email.bounce.suppressed', { count: bounced }, 'cron');
+      }
+    } catch (error) {
+      errors.push({ dsnScan: String(error?.message ?? error).slice(0, 150) });
     }
   } finally {
     await imapLogout(session);

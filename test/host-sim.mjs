@@ -153,6 +153,33 @@ await clickRoute.handler(fakeReq('GET', undefined, { host: 'track.example.com' }
 // 未知 clickId → 404（不重定向）
 assert.equal(badClick.statusCode, 404);
 
+// crm/list 必须返回 fit / lastReply 字段（详情抽屉的对口徽章和最近回复靠它们渲染）
+const crmMod = await import('../dsh/crm.js');
+const { writeFileSync, readFileSync } = await import('node:fs');
+const uniqCompany = `hostsim-${Date.now()}`;
+const { lead: simLead } = crmMod.upsertLead({
+  company: uniqCompany, url: `https://${uniqCompany}.example`, market: 'us',
+  contacts: { emails: [], whatsapps: [], phones: [], socials: {} },
+  score: 9, tier: '高', fit: 'partial',
+});
+crmMod.updateLead(simLead.id, { lastReply: { messageId: '<x@y>', category: 'interested', summary: '要看目录', ts: new Date().toISOString() } });
+try {
+  const listRoute = routes.get('/waimao/api/crm/list');
+  const listRes = fakeRes();
+  await listRoute.handler(fakeReq('GET', undefined, { host: '127.0.0.1:3080' }), listRes);
+  const rows = JSON.parse(listRes.body);
+  const row = rows.find((item) => item.id === simLead.id);
+  assert.ok(row, '列表应包含测试线索');
+  assert.equal(row.fit, 'partial', 'crm/list 必须返回 fit');
+  assert.equal(row.lastReply.category, 'interested', 'crm/list 必须返回 lastReply');
+} finally {
+  // 清理测试线索
+  const storePath = crmMod.storeFile();
+  const db = JSON.parse(readFileSync(storePath, 'utf8'));
+  db.leads = db.leads.filter((item) => item.id !== simLead.id);
+  writeFileSync(storePath, JSON.stringify(db));
+}
+
 // review queue route
 const queueRoute = routes.get('/waimao/api/review/queue');
 const res1 = fakeRes();

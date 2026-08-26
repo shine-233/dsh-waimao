@@ -217,20 +217,32 @@ export function configSummary() {
       baseURL: config.evolution.baseURL,
       instance: config.evolution.instance,
       ready: hasKey(config.evolution.apiKey) && hasKey(config.evolution.instance),
+      hasApiKey: hasKey(config.evolution.apiKey),
     },
     deepseek: {
       baseURL: config.deepseek.baseURL,
       model: config.deepseek.model,
       ready: hasKey(config.deepseek.apiKey),
+      hasApiKey: hasKey(config.deepseek.apiKey),
     },
     smtp: {
       host: config.smtp.host,
       port: config.smtp.port,
+      user: config.smtp.user ?? '',
       from: config.smtp.from,
+      fromName: config.smtp.fromName ?? '',
       ready: hasKey(config.smtp.host) && hasKey(config.smtp.from),
+      hasPass: hasKey(config.smtp.pass),
       dryRun: config.smtp.dryRun !== false,
       dailyCap: Number(config.smtp.dailyCap ?? 0) || 0,
       plainText: config.smtp.plainText === true,
+    },
+    imap: {
+      host: config.imap?.host ?? '',
+      port: Number(config.imap?.port ?? 993),
+      user: config.imap?.user ?? '',
+      mailbox: config.imap?.mailbox ?? 'INBOX',
+      hasPass: hasKey(config.imap?.pass),
     },
     icp: {
       product: String(config.icp?.product ?? ''),
@@ -239,8 +251,8 @@ export function configSummary() {
     },
     cron: config.cron ?? {},
     wa: config.wa ?? {},
-    track: { enabled: hasKey(config.track?.publicBaseUrl), publicBaseUrl: config.track?.publicBaseUrl ?? '' },
-    warmup: { enabled: config.warmup?.enabled === true, partners: (config.warmup?.partners ?? []).length },
+    track: { enabled: hasKey(config.track?.publicBaseUrl), publicBaseUrl: config.track?.publicBaseUrl ?? '', hasSecret: hasKey(config.track?.secret) },
+    warmup: { enabled: config.warmup?.enabled === true, maxPerDay: Number(config.warmup?.maxPerDay ?? 0) || 0, partners: (config.warmup?.partners ?? []).length },
     webhookTokenSet: hasKey(config.webhookToken),
   };
 }

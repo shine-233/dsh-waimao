@@ -42,7 +42,8 @@ export function extractContacts(html, { knownCompany } = {}) {
     mailtos
       .concat(textOnly.match(EMAIL_RE) ?? [])
       .map((value) => value.toLowerCase().trim())
-      .filter((value) => !EMAIL_BAD_DOMAINS.test(value) && !EMAIL_BAD_EXT.test(value))
+      // 占位域名过滤要作用在 @ 后面的域名上（原实现测整个地址，基本不生效）
+      .filter((value) => !EMAIL_BAD_DOMAINS.test(value.split('@')[1] ?? '') && !EMAIL_BAD_EXT.test(value))
       .filter((value) => !/^(noreply|no-reply|postmaster|abuse|webmaster)@/.test(value)),
   );
 

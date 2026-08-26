@@ -9,13 +9,17 @@ assert.equal(calc.cost.FOB, 10800);
 assert.equal(calc.cost.CFR, 12800);
 assert.equal(calc.cost.insurance, 128);
 assert.equal(calc.cost.CIF, 12928);
-assert.equal(calc.cost.DDP, 14128);
+assert.equal(calc.cost.DDP, 14128); // 不传 dutyRate 时 DDP 不含关税（保持兼容）
 assert.equal(calc.quote.FOB, 12960); // 10800 * 1.2
 assert.equal(calc.quote.CIF, 15513.6);
 assert.equal(calc.perUnit.FOB, 12.96);
 const unitCalc = calcPrice({ mode: 'unit', exw: 5, inland: 0.2, port: 0.1, ocean: 1, qty: 1000, margin: 10 });
-assert.equal(unitCalc.cost.FOB, 5300); // 5.3 * 1000
+assert.equal(unitCalc.cost.FOB, 5300); // 5.3 * 1000（ocean 按整批不乘 qty）
 assert.equal(unitCalc.perUnit.FOB, 5.83); // 5.3*1.1
+// DDP 关税：duty 按 CIF 计入
+const ddpCalc = calcPrice({ mode: 'total', exw: 10000, ocean: 2000, dutyRate: 30 });
+assert.equal(ddpCalc.cost.duty, Math.round(12000 * 0.3 * 100) / 100);
+assert.ok(ddpCalc.cost.DDP > ddpCalc.cost.CIF + ddpCalc.cost.duty - 0.01, 'DDP 应含关税+清关费');
 const text = quoteLines(calc);
 assert.ok(text[1].includes('FOB') && text[1].includes('12.96'));
 
@@ -86,10 +90,33 @@ assert.equal(classifyReply('User unknown in virtual mailbox table').category, 'b
 const warmup = await import('../dsh/warmup.js');
 assert.equal(warmup.rampCap(20, 30), 15, '第20天=第3周=5+2*5');
 assert.equal(warmup.rampCap(21, 30), 20, '第21天=第4周=5+3*5');
+// dry_run 总闸对预热强制：强制总闸开启，一封不发、不抛错（防真实配置误发）
+const origV6 = (() => { try { return readFileSync(cfgFile, 'utf8'); } catch { return ''; } })();
+cfg = JSON.parse(readFileSync(cfgFile, 'utf8').replace(/^\uFEFF/, ''));
+cfg.smtp = Object.assign({}, cfg.smtp, { dryRun: true });
+writeFileSync(cfgFile, JSON.stringify(cfg));
+let warmupRound;
+try {
+  warmupRound = await warmup.runWarmupRound({});
+} finally {
+  if (origV6) {
+    writeFileSync(cfgFile, origV6);
+  }
+}
+assert.ok(warmupRound.skipped && warmupRound.skipped.includes('dry_run'), `预热应被总闸拦下: ${JSON.stringify(warmupRound)}`);
 const stats = await import('../dsh/stats.js');
 const report = stats.report();
 assert.ok('abTest' in report);
 assert.ok(report.tracking !== undefined);
+
+/* ---------- 发送时间窗（sendWindow 真实现） ---------- */
+const cron = await import('../dsh/cron.js');
+assert.equal(cron.recipientLocalHour('de', new Date('2026-01-01T12:00:00Z')), 13, 'UTC+1 市场按粗时区换算');
+assert.equal(cron.recipientLocalHour('+999', new Date()), null, '未知市场不检查窗口');
+assert.equal(cron.outsideSendWindow(null), false);
+assert.equal(cron.outsideSendWindow(8), true, '9点前不顺延发送');
+assert.equal(cron.outsideSendWindow(12), false);
+assert.equal(cron.outsideSendWindow(19), true, '19点后不顺延发送');
 
 /* ---------- 时区窗 ---------- */
 const { MARKETS } = await import('../dsh/markets.js');

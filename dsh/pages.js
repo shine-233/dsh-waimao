@@ -741,11 +741,11 @@ const SETTINGS_SECTIONS = [
     ['pass', '密码/授权码', 'password'],
     ['mailbox', '邮箱夹', 'text'],
   ] },
-  { key: 'evolution', title: 'Evolution API', test: 'evolution', fields: [
+  { key: 'evolution', title: 'Evolution API (WhatsApp)', test: 'evolution', fields: [
     ['baseURL', 'Base URL', 'text'],
     ['apiKey', 'API Key', 'password'],
     ['instance', '实例名', 'text'],
-  ] },
+  ], extra: 'waConnect' },
   { key: 'deepseek', title: 'DeepSeek', test: 'deepseek', fields: [
     ['baseURL', 'Base URL', 'text'],
     ['apiKey', 'API Key', 'password'],
@@ -791,7 +791,12 @@ function settingsPage() {
       })
       .join('');
     const testButton = section.test ? `<button class="mini ghost" onclick="testConn('${section.test}',this)">测试连通</button>` : '';
-    return `<div class="panel setPanel" id="tab-${section.key}" style="display:${index === 0 ? 'block' : 'none'};animation:fadeUp .35s backwards"><h2>${esc(section.title)}</h2><div class="kv">${fields}</div><div class="msg status" id="t-${section.key}"></div>${testButton}</div>`;
+    const waConnect = section.extra === 'waConnect'
+      ? `<button class="mini" onclick="waConnect(this)">扫码接入 WhatsApp</button>` +
+        `<span class="mini ghost" id="waState" style="border:none;background:transparent;cursor:default"></span>` +
+        `<div id="waQr" class="mt"></div>`
+      : '';
+    return `<div class="panel setPanel" id="tab-${section.key}" style="display:${index === 0 ? 'block' : 'none'};animation:fadeUp .35s backwards"><h2>${esc(section.title)}</h2><div class="kv">${fields}</div><div class="msg status" id="t-${section.key}"></div><div class="flex">${testButton}${waConnect}</div></div>`;
   }).join('');
   return (
     COMMON_HEAD('设置', 'settings') +
@@ -807,8 +812,11 @@ function settingsPage() {
     `api('api/config').then(function(r){if(!r.ok)return;var s=r.j;` +
     `$$('[data-section]').forEach(function(el){` +
     `var sec=el.getAttribute('data-section'),key=el.getAttribute('data-key');` +
-    `var v=(s[sec]||{})[key];if(v===undefined||v===null)return;` +
-    `if(SECRET_KEYS.indexOf(key)>=0&&typeof v==='string'&&v){el.placeholder='已设置，留空保持不变';return;}` +
+    `var v=(s[sec]||{})[key];` +
+    `if(v===undefined||v===null){` +
+    `var flag='has'+key.charAt(0).toUpperCase()+key.slice(1);` +
+    `if(SECRET_KEYS.indexOf(key)>=0&&s[sec]&&s[sec][flag]){el.placeholder='已设置，留空保持不变';}` +
+    `return;}` +
     `el.value=String(v);});});` +
     `document.getElementById('save').onclick=function(){var btn=this;btn.disabled=true;btn.innerHTML='保存中…';` +
     `var patch={};` +
@@ -828,6 +836,20 @@ function settingsPage() {
     `.then(function(r){btn.disabled=false;btn.innerHTML='测试连通';` +
     `tip.innerHTML=r.j.ok?'<span class="ok">'+esc(r.j.message)+'</span>':'<span class="err">'+esc(r.j.error||'失败')+'</span>';` +
     `if(r.j.ok)toast(name+' 连通 ✓');else toast(name+' 连接失败','err');});}` +
+    `function waConnect(btn){btn.disabled=true;btn.innerHTML='<span class="spinner"></span>请求中';` +
+    `var box=document.getElementById('waQr');var st=document.getElementById('waState');` +
+    `api('api/evolution/connect',{method:'POST'})` +
+    `.then(function(r){btn.disabled=false;btn.innerHTML='扫码接入 WhatsApp';` +
+    `if(r.j.error){st.innerHTML='<span class="err">'+esc(r.j.error)+'</span>';return;}` +
+    `if(r.j.connected){st.innerHTML='<span class="ok">已连接</span>';box.innerHTML='';toast('WhatsApp 已连接');return;}` +
+    `st.innerHTML='<span class="warn">等待扫码</span>';` +
+    `var html='';` +
+    `if(r.j.qrcodeBase64){var src=r.j.qrcodeBase64.startsWith('data:')?r.j.qrcodeBase64:'data:image/png;base64,'+r.j.qrcodeBase64;` +
+    `html+='<img src="'+src+'" alt="QR" style="width:220px;height:220px;background:#fff;padding:8px;border-radius:8px">';}` +
+    `if(r.j.pairingCode){html+='<div class="mt mono" style="font-size:18px">配对码: <b>'+esc(r.j.pairingCode)+'</b></div>';}` +
+    `html+='<div class="muted" style="font-size:12px">WhatsApp → 设置 → 已关联的设备 → 关联设备</div>';` +
+    `box.innerHTML=html;` +
+    `}).catch(function(e){btn.disabled=false;btn.innerHTML='扫码接入 WhatsApp';toastErr(e);});}` +
     `</script>` +
     FOOTER
   );

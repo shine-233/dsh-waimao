@@ -2,6 +2,7 @@
 // 支持 IMAP 字面量 {N} 分块读取。只做回复检测需要的部分，不做完整解析。
 import tls from 'node:tls';
 import net from 'node:net';
+import { StringDecoder } from 'node:string_decoder';
 
 function connect(host, port, secure, timeout = 25_000) {
   return new Promise((resolve, reject) => {
@@ -23,13 +24,25 @@ function connect(host, port, secure, timeout = 25_000) {
   });
 }
 
+const IDLE_TIMEOUT = 120_000; // 空闲 2 分钟无数据即断开（防止等一个永远不来的字面量）
+
 /** 带字面量感知的 IMAP 会话。 */
 class ImapSession {
   constructor(socket) {
     this.socket = socket;
     this.buffer = '';
+    this.decoder = new StringDecoder('utf8'); // 跨 TCP 分块安全解码，避免多字节字符被切开变乱码
     this.tagCounter = 0;
     this.pending = null; // {resolve, reject}
+    socket.setTimeout(IDLE_TIMEOUT, () => {
+      const error = new Error(`IMAP idle timeout (${IDLE_TIMEOUT / 1000}s no data)`);
+      socket.destroy();
+      if (this.pending) {
+        const { reject } = this.pending;
+        this.pending = null;
+        reject(error);
+      }
+    });
     socket.on('data', (chunk) => this.#onData(chunk));
     socket.on('error', (error) => {
       if (this.pending) {
@@ -41,7 +54,7 @@ class ImapSession {
   }
 
   #onData(chunk) {
-    this.buffer += chunk.toString('utf8');
+    this.buffer += this.decoder.write(chunk);
     if (!this.pending) {
       return;
     }
@@ -140,18 +153,30 @@ export async function imapSelect(session, mailbox = 'INBOX') {
   return { exists: exists ? Number(exists[1]) : 0 };
 }
 
-/**
- * 搜索某发件人自某日期以来的邮件。
- * @returns {Promise<number[]>} 序列号列表（新→旧不保证，按 IMAP 返回）
- */
-export async function imapSearchFrom(session, fromEmail, sinceDate) {
-  const since = sinceDate.toISOString().slice(0, 10).split('-').reverse().join('-'); // DD-MM-YYYY
-  const response = await session.exec(`SEARCH FROM ${quote(fromEmail)} SINCE ${since} ALL`);
+const IMAP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** IMAP SINCE 日期：RFC 3501 要求 DD-Mon-YYYY（如 01-Aug-2026）。 */
+export function imapDate(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  return `${String(d.getUTCDate()).padStart(2, '0')}-${IMAP_MONTHS[d.getUTCMonth()]}-${d.getUTCFullYear()}`;
+}
+
+/** 通用 SEARCH：criteria 为 IMAP 搜索语法。返回序列号列表。 */
+export async function imapSearch(session, criteria) {
+  const response = await session.exec(`SEARCH ${criteria}`);
   const line = response.split('\r\n').find((item) => item.startsWith('* SEARCH'));
   if (!line) {
     return [];
   }
   return line.slice('* SEARCH'.length).trim().split(/\s+/).filter(Boolean).map(Number);
+}
+
+/**
+ * 搜索某发件人自某日期以来的邮件。
+ * @returns {Promise<number[]>} 序列号列表（新→旧不保证，按 IMAP 返回）
+ */
+export async function imapSearchFrom(session, fromEmail, sinceDate) {
+  return imapSearch(session, `FROM ${quote(fromEmail)} SINCE ${imapDate(sinceDate)}`);
 }
 
 function parseHeaderBlock(block) {
@@ -181,9 +206,19 @@ function decodeBody(text, encoding) {
       return Buffer.from(cleaned, 'base64').toString('utf8');
     }
     if (enc.includes('quoted-printable')) {
-      return text
-        .replace(/=\r?\n/g, '')
-        .replace(/=([0-9A-F]{2})/gi, (_, hex) => Buffer.from(hex, 'hex').toString('latin1'));
+      // 按字节解码再重组 UTF-8：=XX 是字节级转义，逐字节 toString('latin1') 会把
+      // 多字节序列拆散成乱码（中文回复必中）
+      const clean = text.replace(/=\r?\n/g, '');
+      const bytes = [];
+      for (let i = 0; i < clean.length; i += 1) {
+        if (clean[i] === '=' && /^[0-9A-F]{2}$/i.test(clean.slice(i + 1, i + 3))) {
+          bytes.push(parseInt(clean.slice(i + 1, i + 3), 16));
+          i += 2;
+        } else {
+          bytes.push(clean.charCodeAt(i) & 0xff);
+        }
+      }
+      return Buffer.from(bytes).toString('utf8');
     }
     return text;
   } catch {
@@ -195,15 +230,55 @@ function decodeBody(text, encoding) {
  * 抓一封信的头部+正文（正文截断 maxBody 字节）。
  * @returns {{messageId, inReplyTo, references, subject, from, date, body}}
  */
+/**
+ * 从 FETCH 响应里提取头块。优先按 IMAP 字面量 {N} 的字节长度截取——
+ * 旧的正则懒惰匹配会在头值含括号时提前截断（如 From: "Foo (Trading Co.)" <a@b.com>），
+ * 导致 Message-ID 丢失、回复被去重逻辑静默吞掉。
+ */
+export function extractHeaderBlock(response) {
+  const literal = response.match(/HEADER\.FIELDS \([^)]*\)\] ?\{(\d+)\}\r\n/i);
+  if (literal) {
+    const start = literal.index + literal[0].length;
+    // 多留一点余量应对原始 UTF-8 头（字节数>字符数），下面再精确裁掉尾部
+    let block = response.slice(start, start + Number(literal[1]) + 8);
+    const cuts = [block.indexOf('\r\n\r\n'), block.indexOf('\r\n)')].filter((i) => i >= 0);
+    if (cuts.length > 0) {
+      block = block.slice(0, Math.min(...cuts));
+    }
+    return block;
+  }
+  // 兜底：不带字面量标记的响应
+  return response.match(/HEADER\.FIELDS \([^)]*\)\] ?\r?\n?([\s\S]*?)\r?\n?\)/i)?.[1] ?? '';
+}
+
+/**
+ * 从 FETCH 响应里提取 TEXT 段。旧正则写成 BODY\[TEXT\]<0>\]（括号顺序反了），
+ * 真实服务器响应是 `BODY[TEXT]<0> {N}`，导致正文永远提取不到、回复分类拿到空字符串。
+ * 这里同样按字面量 {N} 字节长度定位。
+ */
+function extractTextBlock(response) {
+  const literal = response.match(/BODY\[TEXT\](?:<0[^>]*>)? ?\{(\d+)\}\r\n/i);
+  if (!literal) {
+    // 兜底：不带字面量标记的响应
+    return response.match(/BODY\[TEXT\][^\r\n]*?\r?\n?([\s\S]*?)(?:\r\n\)|\r?\nA\d{3} |$)/i)?.[1] ?? '';
+  }
+  const start = literal.index + literal[0].length;
+  let seg = response.slice(start, start + Number(literal[1]) + 8);
+  const cutMatches = [seg.indexOf('\r\n)'), seg.match(/\r?\nA\d{3} /)?.index].filter((i) => i >= 0);
+  if (cutMatches.length > 0) {
+    seg = seg.slice(0, Math.min(...cutMatches));
+  }
+  return seg;
+}
+
 export async function imapFetchMessage(session, sequence, { maxBody = 8000 } = {}) {
   const command =
     `FETCH ${sequence} (BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES SUBJECT FROM DATE CONTENT-TYPE CONTENT-TRANSFER-ENCODING)] BODY.PEEK[TEXT]<0.${maxBody}>)`;
   const response = await session.exec(command);
   // 拆 HEADER / TEXT 两段
-  const headerMatch = response.match(/HEADER\.FIELDS \([^)]*\)\] ?\r?\n?([\s\S]*?)\r?\n?\)/i);
-  const textMatch = response.match(/BODY\[TEXT\]<0>\] ?\r?\n?([\s\S]*?)(?:\r?\nA\d{3} |$)/i);
-  const headers = parseHeaderBlock(headerMatch?.[1] ?? '');
-  const rawBody = (textMatch?.[1] ?? '').trim();
+  const headerBlock = extractHeaderBlock(response);
+  const headers = parseHeaderBlock(headerBlock);
+  const rawBody = extractTextBlock(response).trim();
   const body = decodeBody(rawBody, headers['content-transfer-encoding']);
   const plainFromHtml = body
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')

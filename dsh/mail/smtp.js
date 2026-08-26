@@ -5,6 +5,10 @@ import tls from 'node:tls';
 import { createHash, randomUUID } from 'node:crypto';
 
 const CRLF = '\r\n';
+// 会话级空闲超时：连接阶段有 timeout，但 DATA 后 await readReply 对半开
+// 连接会无限等待，拖住整个 cron。空闲 120s 无数据即销毁并报错。
+// （Node 的 socket.setTimeout 只在持续空闲时触发，收发数据自动重置）
+const IDLE_TIMEOUT = 120_000;
 
 function readReply(socket) {
   return new Promise((resolve, reject) => {
@@ -13,10 +17,15 @@ function readReply(socket) {
       buffer += chunk.toString('utf8');
       const lines = buffer.split(CRLF);
       if (lines.length >= 2 && /^\d{3} /.test(lines[lines.length - 2] ?? '')) {
+        socket.setTimeout(0);
         socket.removeListener('data', onData);
         resolve({ code: Number(buffer.slice(0, 3)), text: buffer });
       }
     };
+    socket.setTimeout(IDLE_TIMEOUT, () => {
+      socket.destroy();
+      reject(new Error(`SMTP idle timeout (${IDLE_TIMEOUT / 1000}s no data)`));
+    });
     socket.on('data', onData);
     socket.once('error', (error) => {
       socket.removeListener('data', onData);

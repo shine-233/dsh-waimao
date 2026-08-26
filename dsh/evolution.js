@@ -72,14 +72,15 @@ export async function sendMedia(number, { media, mediatype = 'document', filenam
     throw new Error(`invalid phone number: ${number}`);
   }
   const isUrl = /^https?:\/\//i.test(String(media));
-  const body = isUrl
-    ? { number: digits, mediatype, media: String(media), caption: String(caption ?? '') }
-    : {
-        number: digits,
-        mediatype,
-        caption: String(caption ?? ''),
-        mediaMessage: { base64: String(media).replace(/^data:[^;]+;base64,/, ''), filename: String(filename) },
-      };
+  // Evolution API v2 发送负载是扁平结构：{ number, mediatype, media, fileName?, caption }。
+  // mediaMessage:{base64,filename} 是 webhook 接收载荷的形状，发出去会失败
+  const body = {
+    number: digits,
+    mediatype,
+    media: isUrl ? String(media) : String(media).replace(/^data:[^;]+;base64,/, ''),
+    fileName: String(filename),
+    caption: String(caption ?? ''),
+  };
   return evoFetch('/message/sendMedia/{instance}', { method: 'POST', body, signal });
 }
 
@@ -259,4 +260,46 @@ export function normalizeHistory(payload, chatJid) {
     });
   }
   return out;
+}
+
+/**
+ * WhatsApp 扫码接入：实例未连接时返回二维码（base64）/配对码；
+ * 已连接时 Evolution 返回 4xx 且文案含 open/connected，归一化为 connected。
+ * 返回: { connected, qrcodeBase64?, pairingCode?, state? }
+ */
+export async function connectInstance(signal) {
+  const { base, apiKey, instance } = requireEvo(readConfig());
+  const url = `${base}/instance/connect/${encodeURIComponent(instance)}`;
+  const response = await fetch(url, {
+    headers: { apikey: apiKey },
+    signal: signal ?? AbortSignal.timeout(20_000),
+  });
+  const text = await response.text();
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = { raw: text.slice(0, 300) };
+  }
+  if (response.ok) {
+    const qr = payload?.qrcode;
+    const qrcodeBase64 = typeof qr === 'string' ? qr : (qr?.base64 ?? null);
+    const pairingCode = qr?.pairingCode ?? payload?.pairingCode ?? null;
+    const state = payload?.instance?.state ?? null;
+    if (qrcodeBase64 || pairingCode) {
+      return { connected: false, qrcodeBase64, pairingCode, state };
+    }
+    return { connected: state === 'open', state, qrcodeBase64: null, pairingCode: null };
+  }
+  if ([400, 403, 404, 409].includes(response.status) && /open|connected|already/i.test(text)) {
+    return { connected: true, state: 'open' };
+  }
+  throw new Error(`Evolution API ${response.status} /instance/connect: ${payload?.error?.message ?? payload?.message ?? text.slice(0, 200)}`);
+}
+
+/** 查询实例连接状态。 */
+export async function connectionState(signal) {
+  const payload = await evoFetch('/instance/connectionState/{instance}', { signal });
+  const state = payload?.instance?.state ?? payload?.state ?? 'unknown';
+  return { state, connected: state === 'open' };
 }

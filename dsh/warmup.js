@@ -1,10 +1,11 @@
 // 邮箱预热（自托管单机版）：
-//  - 爬坡计划：新域名/新账号直接群发=进垃圾箱。按启动天数限制每日真实发送量。
-//  - 互动预热：主账号 ↔ 伙伴账号互发带标签的邮件，cron 自动回复、标星、
-//    从垃圾箱挪回收件箱（IMAP MOVE，服务器不支持则跳过）——模拟真实往来，
-//    帮邮箱服务商建立"这是正常通信"的印象。
+//  - 爬坡计划：新域名/新账号直接群发=进垃圾箱。按启动天数限制"预热情报"每日量，
+//    该上限对预热邮件本身强制生效（业务发送由 smtp.dailyCap 保护）。
+//  - 互动预热：主账号 ↔ 伙伴账号互发带标签的邮件，cron 自动回复、标星、已读——
+//    模拟真实往来，帮邮箱服务商建立"这是正常通信"的印象。
 // 限制说明：真正的多域名预热池需要多台收件端配合；单机版做的是"自有账号
-// 之间的真实互动 + 发送爬坡闸门"，这两件事对送达率贡献最大且完全自托管。
+// 之间的真实互动 + 预热爬坡限额"，这两件事对送达率贡献最大且完全自托管。
+// 不做 IMAP MOVE（挪回收件箱需要服务器支持且误用风险高）。
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -51,7 +52,7 @@ export function warmupConfigured() {
   );
 }
 
-/** 今日已发业务邮件数（审计推导），预热闸门 = 爬坡上限 - 今日已发。 */
+/** 今日已发业务邮件数（审计推导），仅供参考展示；预热自身的量由本轮内计数约束。 */
 export function todayBudget() {
   const config = readConfig();
   const db = load();
@@ -78,10 +79,14 @@ function querySentToday(today) {
  * 自动回复 + 标星 + （尽力）挪回收件箱。
  */
 export async function runWarmupRound({ signal } = {}) {
+  const config = readConfig();
+  // dry_run 总闸优先：预热也只做真实发送，总闸开着就一封都不发（也不写当日 latch）
+  if (config.smtp?.dryRun !== false) {
+    return { skipped: 'smtp.dry_run=true：预热不发送真实邮件' };
+  }
   if (!warmupConfigured()) {
     throw new Error('预热未配置：config.warmup.enabled=true 且至少一个完整伙伴账号（host/user/pass/imapHost）');
   }
-  const config = readConfig();
   const db = load();
   if (!db.startedAt) {
     db.startedAt = new Date().toISOString();
@@ -91,11 +96,22 @@ export async function runWarmupRound({ signal } = {}) {
   if (db.log.some((entry) => entry.day === today)) {
     return { skipped: `今天(${today})已跑过一轮`, day: today };
   }
+  // 爬坡额度对预热线强制：今日已发达到 rampCap 就停
+  const budget = todayBudget();
+  if (budget.cap !== null && budget.remaining <= 0) {
+    return { skipped: `今日预热额度已用完 (${budget.sentToday}/${budget.cap})`, day: today };
+  }
+  let sentLegs = 0;
+  const withinBudget = () => budget.cap === null || sentLegs < budget.cap;
   const main = config.smtp;
   const results = [];
   for (const partner of config.warmup.partners ?? []) {
     if (signal?.aborted) {
       break;
+    }
+    if (!withinBudget()) {
+      results.push({ leg: 'skipped', partner: partner.user, ok: false, error: '已达今日预热爬坡上限' });
+      continue;
     }
     const tag = randomUUID().slice(0, 8);
     // 1) 主 → 伙伴
@@ -106,6 +122,8 @@ export async function runWarmupRound({ signal } = {}) {
         subject: `${WARMUP_TAG} ${tag} Quick hello from our sales inbox`,
         body: `Hi team,\n\nTesting our sending setup — replying to keep the thread alive.\n\nRef: ${tag}\n`,
       });
+      sentLegs += 1;
+      audit('email.warmup', { leg: 'main->partner', to: partner.user, tag }, 'cron');
       results.push({ leg: 'main->partner', partner: partner.user, ok: true });
     } catch (error) {
       results.push({ leg: 'main->partner', partner: partner.user, ok: false, error: String(error?.message ?? error).slice(0, 120) });
@@ -128,6 +146,8 @@ export async function runWarmupRound({ signal } = {}) {
             { host: partner.smtpHost ?? partner.host, port: partner.smtpPort ?? (partner.smtpSecure === false ? 587 : 465), secure: partner.smtpSecure !== false, user: partner.user, pass: partner.pass, from: partner.user },
             { from: partner.user, to: main.from, subject: `Re: ${message.subject}`, body: `Got it — thanks!\n\nRef: ${tag}`, inReplyTo: message.messageId },
           );
+          sentLegs += 1;
+          audit('email.warmup', { leg: 'partner-auto-reply', from: partner.user, tag }, 'cron');
           // 标星 + 已读（尽力）
           try {
             session.socket.write(`B1 STORE ${seq} +FLAGS (\\Seen \\Flagged)\r\n`);
@@ -144,6 +164,12 @@ export async function runWarmupRound({ signal } = {}) {
     }
   }
   const entry = { day: today, at: new Date().toISOString(), results };
+  // 全部失败时不写当日 latch，下一轮自动重试（否则预热线当天静默空转）
+  const okCount = results.filter((item) => item.ok).length;
+  const attempted = results.filter((item) => item.leg !== 'skipped').length;
+  if (attempted > 0 && okCount === 0) {
+    return { day: today, results, note: '本轮全部失败，未记当日完成，稍后重试' };
+  }
   db.log.push(entry);
   if (db.log.length > 365) {
     db.log = db.log.slice(-365);

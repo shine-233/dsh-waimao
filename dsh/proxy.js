@@ -35,17 +35,6 @@ export function resolveProxy(explicit) {
   }
 }
 
-/**
- * 与 fetch(url, init) 同参，返回 {ok, status, text()}。
- * @param {string} proxy 空 = 直连 fetch；http(s) 代理 = CONNECT 隧道
- */
-export async function httpFetch(target, init = {}, proxy = '') {
-  if (!proxy) {
-    return fetch(target, init);
-  }
-  return requestThroughProxy(target, init, proxy);
-}
-
 function collect(resp) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -57,10 +46,30 @@ function collect(resp) {
         status: resp.statusCode,
         headers: resp.headers,
         text: async () => text,
+        // 调用方（serp.js / dossier.js）在两种路径上都用 response.json()，
+        // 这里不提供的话走代理时直接 TypeError
+        json: async () => JSON.parse(text),
       });
     });
     resp.on('error', reject);
   });
+}
+
+/**
+ * 与 fetch(url, init) 同参，返回 {ok, status, text(), json()}。
+ * @param {string} proxy 空 = 直连 fetch；http(s) 代理 = CONNECT 隧道
+ * 代理路径手动跟随 3xx（裸 http.request 不自动重定向，RDAP 的 rdap.org 依赖它）
+ */
+export async function httpFetch(target, init = {}, proxy = '', depth = 0) {
+  const response = proxy ? await requestThroughProxy(target, init, proxy) : await fetch(target, init);
+  const location = response.headers?.location;
+  if (
+    proxy && depth < 3 && location &&
+    [301, 302, 303, 307, 308].includes(response.status)
+  ) {
+    return httpFetch(new URL(location, target).href, init, proxy, depth + 1);
+  }
+  return response;
 }
 
 function requestThroughProxy(target, init, proxy) {

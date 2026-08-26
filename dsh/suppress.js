@@ -42,10 +42,27 @@ export function suppress(email, reason = 'manual', actor = 'agent') {
   }
   const entry = { email: clean, reason, ts: new Date().toISOString() };
   list.push(entry);
+  // 容量裁剪：优先丢弃最老的"非永久"记录；退订/退信/投诉是合规红线，
+  // 裁掉它们会导致给已退订的人重新发信
   if (list.length > 10_000) {
-    list.splice(0, list.length - 10_000);
+    const PERMANENT = /^(hard-bounce|unsubscribe|unsubscribe-reply|complaint)/;
+    const removableIndexes = [];
+    list.forEach((item, index) => {
+      if (!PERMANENT.test(String(item.reason ?? ''))) {
+        removableIndexes.push(index);
+      }
+    });
+    let excess = list.length - 10_000;
+    const drop = new Set();
+    for (const index of removableIndexes) {
+      if (excess <= 0) break;
+      drop.add(index);
+      excess -= 1;
+    }
+    save(drop.size > 0 ? list.filter((_, index) => !drop.has(index)) : list);
+  } else {
+    save(list);
   }
-  save(list);
   audit('suppress.add', { email: clean, reason }, actor);
   return entry;
 }

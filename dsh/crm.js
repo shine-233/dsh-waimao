@@ -152,7 +152,7 @@ export function updateLead(id, patch, { actor = 'agent', activityNote } = {}) {
     throw new Error(`invalid status: ${patch.status} (use ${STATUSES.join('/')})`);
   }
   const changed = {};
-  for (const key of ['status', 'tags', 'ownerNote', 'company', 'market', 'emailStatus', 'score', 'tier', 'fit', 'advice', 'sequence', 'lastMessageId', 'lastReply', 'pendingEmail', 'dossier']) {
+  for (const key of ['status', 'tags', 'ownerNote', 'company', 'market', 'emailStatus', 'score', 'tier', 'fit', 'advice', 'sequence', 'lastMessageId', 'lastReply', 'pendingEmail', 'dossier', 'contacts']) {
     if (patch[key] !== undefined) {
       if (lead[key] !== patch[key]) {
         changed[key] = [lead[key], patch[key]];

@@ -50,12 +50,12 @@ export async function deliverabilityCheck(domain, { dkimSelector } = {}) {
     advice.push('添加 DMARC 记录，例如: v=DMARC1; p=none; rua=mailto:dmarc@' + clean + '（先观察再收紧到 quarantine）');
   }
 
-  // DKIM：常见 selector 探测
+  // DKIM：常见 selector 探测。p= 后面必须有实际公钥（吊销密钥 p= 为空，不算通过）
   const selectors = [dkimSelector, ...COMMON_DKIM_SELECTORS].filter(Boolean);
   let dkimFound = null;
   for (const selector of [...new Set(selectors)]) {
     const records = await txtRecords(`${selector}._domainkey.${clean}`);
-    const hit = records.find((record) => record.toLowerCase().includes('v=dkim1') || record.includes('p='));
+    const hit = records.find((record) => (record.toLowerCase().includes('v=dkim1') || record.includes('p=')) && /p=[A-Za-z0-9+/]{8}/.test(record));
     if (hit) {
       dkimFound = { selector, record: hit.slice(0, 100) };
       break;

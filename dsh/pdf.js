@@ -4,7 +4,12 @@
 import { createHash } from 'node:crypto';
 
 function esc(text) {
-  return String(text ?? '').replace(/[\\()]/g, (match) => `\\${match}`);
+  // 输出按 latin1 编码：é/ñ 等 U+00FF 以内字符原样保留（对应 WinAnsi 字形）；
+  // 中文等 U+0100 以上没有字形，替换为 ?。必须在转义前做，
+  // 且所有 /Length 与 xref 偏移都按"字符数"算（latin1 下 1 字符 = 1 字节）。
+  return String(text ?? '')
+    .replace(/[\u0100-\uFFFF]/g, '?')
+    .replace(/[\\()]/g, (match) => `\\${match}`);
 }
 
 function wrap(text, width) {
@@ -65,7 +70,7 @@ export function quotePdf(opts) {
   add(`TOTAL: ${currency} ${subtotal.toFixed(2)}`, { size: 12, bold: true, gap: 14 });
 
   add(`Lead time: ${opts.leadTime ?? 'to be confirmed'}`, { size: 9, gap: 2 });
-  add(`Payment: ${opts.payment ?? 'T/T', ''}`, { size: 9, gap: 2 });
+  add(`Payment: ${opts.payment ?? 'T/T'}`, { size: 9, gap: 2 });
   add(`Quote validity: ${opts.validity ?? '15 days'}`, { size: 9, gap: 10 });
   for (const note of wrap(opts.notes ?? '', 95)) {
     add(`Note: ${note}`, { size: 8, gap: 2 });
@@ -177,7 +182,7 @@ function renderPdf(lines) {
       parts.push(`BT /${line.bold ? 'F2' : 'F1'} ${line.size} Tf 50 ${line.y} Td (${esc(line.text)}) Tj ET`);
     }
     const stream = parts.join('\n');
-    const contentId = push(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
+    const contentId = push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
     contentIds.push(contentId);
   }
   const pagesId = objects.length + pagesContent.length + 1; // 预留
@@ -191,13 +196,15 @@ function renderPdf(lines) {
   // pagesId 占位与 realPagesId 相等时无需修正（我们预留的数量恰好一致）
   const catalogId = push(`<< /Type /Catalog /Pages ${realPagesId} 0 R >>`);
 
+  // 输出按 latin1 编码（1 字符=1 字节），偏移量必须用 pdf.length（字符数）。
+  // 用 Buffer.byteLength（UTF-8）会在含非 ASCII 字符时整体错位，PDF 打不开。
   let pdf = '%PDF-1.4\n';
   const offsets = [0];
   objects.forEach((body, index) => {
-    offsets.push(Buffer.byteLength(pdf));
+    offsets.push(pdf.length);
     pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
   });
-  const xrefAt = Buffer.byteLength(pdf);
+  const xrefAt = pdf.length;
   pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
   for (let i = 1; i <= objects.length; i += 1) {
     pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;

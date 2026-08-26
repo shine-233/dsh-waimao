@@ -26,33 +26,45 @@ let timer = null;
 
 /** 注册任务：fn 必须自带幂等与错误处理（这里 catch 全部）。 */
 export function registerJob(name, { everyMs, fn, description }) {
-  jobs.set(name, { everyMs, fn, description, lastRun: null, lastResult: null, lastError: null });
+  jobs.set(name, { everyMs, fn, description, lastRun: null, lastResult: null, lastError: null, running: false });
+}
+
+function persist(name, patch) {
+  const state = loadState();
+  state[name] = { ...(state[name] ?? {}), ...patch };
+  saveState(state);
 }
 
 function tick() {
   const now = Date.now();
   const state = loadState();
   for (const [name, job] of jobs) {
+    // 重叠保护：上一轮还没跑完（AI 分类/IMAP 扫描可能超过 everyMs），本轮跳过
+    if (job.running) {
+      continue;
+    }
     const last = state[name]?.lastRun ? Date.parse(state[name].lastRun) : 0;
     if (now - last < job.everyMs) {
       continue;
     }
+    job.running = true;
     Promise.resolve()
       .then(() => job.fn())
       .then((result) => {
         job.lastRun = new Date().toISOString();
         job.lastResult = result ?? 'ok';
         job.lastError = null;
-        state[name] = { lastRun: job.lastRun, lastResult: job.lastResult };
-        saveState(state);
+        persist(name, { lastRun: job.lastRun, lastResult: job.lastResult });
         audit('cron.run', { job: name, result: typeof result === 'string' ? result : JSON.stringify(result)?.slice(0, 200) }, 'cron');
       })
       .catch((error) => {
         job.lastRun = new Date().toISOString();
         job.lastError = String(error?.message ?? error).slice(0, 300);
-        state[name] = { lastRun: job.lastRun, lastError: job.lastError };
-        saveState(state);
+        persist(name, { lastRun: job.lastRun, lastError: job.lastError });
         audit('cron.error', { job: name, error: job.lastError }, 'cron');
+      })
+      .finally(() => {
+        job.running = false;
       });
   }
 }
@@ -73,16 +85,26 @@ export function stop() {
   }
 }
 
-/** 手动触发一次（cron_status / 网页按钮用）。 */
+/** 手动触发一次（cron_status / 网页按钮用）。结果落盘，避免自动调度立刻重跑。 */
 export async function runOnce(name) {
   const job = jobs.get(name);
   if (!job) {
     throw new Error(`unknown job: ${name} (have: ${[...jobs.keys()].join(',')})`);
   }
-  const result = await job.fn();
-  job.lastRun = new Date().toISOString();
-  job.lastResult = result ?? 'ok';
-  return { job: name, result };
+  if (job.running) {
+    throw new Error(`job ${name} is already running`);
+  }
+  job.running = true;
+  try {
+    const result = await job.fn();
+    job.lastRun = new Date().toISOString();
+    job.lastResult = result ?? 'ok';
+    persist(name, { lastRun: job.lastRun, lastResult: job.lastResult });
+    audit('cron.run', { job: name, manual: true, result: typeof result === 'string' ? result : JSON.stringify(result)?.slice(0, 200) }, 'cron');
+    return { job: name, result };
+  } finally {
+    job.running = false;
+  }
 }
 
 export function status() {
@@ -107,21 +129,45 @@ import * as evolution from './evolution.js';
 import { dueSteps, stopSequence } from './mail/sequence.js';
 import { scanReplies } from './mail/replies.js';
 import * as monitorMod from './monitor.js';
+import { MARKETS } from './markets.js';
 
 const STATE_FILE = join(DATA_DIR, 'cron.json');
 
-/** 邮件序列到期执行：sendEmail({lead, subject, body, dryRun}) 由 index.js 提供。 */
+/** 收件人当地时间的小时数（按市场预设的粗时区；未知市场返回 null）。 */
+export function recipientLocalHour(market, now = new Date()) {
+  const m = MARKETS[String(market ?? '').toLowerCase()];
+  if (!m || typeof m.utc !== 'number') {
+    return null;
+  }
+  return (((now.getUTCHours() + m.utc) % 24) + 24) % 24;
+}
+
+/** 发送时间窗判断：收件人当地时间 9-19 点之外不顺延发送。 */
+export function outsideSendWindow(localHour) {
+  return localHour !== null && (localHour < 9 || localHour >= 19);
+}
+
+/**
+ * 邮件序列到期执行：sendEmail({lead, subject, body, ...}) 由 index.js 提供。
+ * smtp.sendWindow=true（默认）时，收件人当地时间 9-19 点之外的顺延到下一轮。
+ */
 export function createSequenceJob({ sendEmail }) {
   return async () => {
     const config = readConfig();
     if (config.smtp?.dryRun !== false) {
       return 'smtp.dry_run=true，序列仅标记不发送';
     }
+    const windowOn = config.smtp?.sendWindow !== false;
     const leads = crm.listLeads({ limit: 500 });
     let sent = 0;
+    let deferred = 0;
     for (const lead of leads) {
       if (!lead.sequence || lead.status === 'replied' || lead.status === 'won' || lead.status === 'lost') {
         continue;
+      }
+      if (windowOn && outsideSendWindow(recipientLocalHour(lead.market))) {
+        deferred += 1;
+        continue; // 步骤保持 pending，下一轮窗口内再发
       }
       const due = dueSteps(lead.sequence);
       for (const step of due) {
@@ -131,7 +177,7 @@ export function createSequenceJob({ sendEmail }) {
           break;
         }
         try {
-          const result = await sendEmail({ lead, to: email, subject: step.subject, body: step.body, inReplyTo: lead.lastMessageId });
+          const result = await sendEmail({ lead, to: email, subject: step.subject, body: step.body, inReplyTo: lead.lastMessageId, isFirstEmail: step.day === 0 && !lead.lastMessageId });
           step.status = 'sent';
           step.sentAt = new Date().toISOString();
           crm.updateLead(lead.id, {
@@ -148,7 +194,7 @@ export function createSequenceJob({ sendEmail }) {
         }
       }
     }
-    return sent > 0 ? `sent ${sent} follow-ups` : 'no due steps';
+    return sent > 0 ? `sent ${sent} follow-ups` : deferred > 0 ? `no due steps, ${deferred} deferred (outside send window)` : 'no due steps';
   };
 }
 

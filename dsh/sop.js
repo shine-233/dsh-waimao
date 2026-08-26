@@ -171,7 +171,7 @@ export function nextStep(taskId, prereq = {}) {
       if (task.outreach.length === 0 && prereq.force !== true) {
         throw new Error('outreach 未完成：还没有任何发送记录（或传 force=true 表示本轮不发送）');
       }
-      return { task: advance(task, `${task.outreach.length} 次触达`), hint: '调用 sop_close 生成结案报告' };
+      return { task: advance(task, `${task.outreach.length} 次触达`), hint: '再调一次 sop_next 进入 close 阶段，自动生成结案报告' };
     case 'close':
       {
         const closed = closeTask(task.id);

@@ -75,23 +75,30 @@ function prune(db) {
 
 /**
  * 把纯文本正文转成带追踪的 HTML（像素 + 链接包裹）。
+ * URL 必须在 HTML 转义"之前"的原文上提取登记——先转义再匹配的话，
+ * 带 & 的查询参数会变成 &amp; 存进链接表，点击后 302 到坏地址。
  * @returns {{html: string, clickMap: Record<string,string>}}
  */
 export function buildTrackedHtml({ text, trackId, base }) {
-  const escaped = String(text ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  const escape = (value) => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const urlRe = /https?:\/\/[^\s<>"')]+/g;
   const db = load();
   const record = db.records[trackId];
   const clickMap = {};
-  const html = escaped.replace(urlRe, (url) => {
-    const clean = url.replace(/[.,;:!?]+$/, '');
+  const raw = String(text ?? '');
+  const parts = [];
+  let last = 0;
+  for (const match of raw.matchAll(urlRe)) {
+    const clean = match[0].replace(/[.,;:!?]+$/, '');
+    const tail = match[0].slice(clean.length);
     const cid = clickIdOf(trackId, clean);
     clickMap[cid] = clean;
-    return `<a href="${base}/waimao/click?c=${cid}">${clean}</a>${url.slice(clean.length)}`;
-  });
+    parts.push(escape(raw.slice(last, match.index)));
+    parts.push(`<a href="${base}/waimao/click?c=${cid}">${escape(clean)}</a>${escape(tail)}`);
+    last = match.index + match[0].length;
+  }
+  parts.push(escape(raw.slice(last)));
+  const html = parts.join('');
   if (record) {
     Object.assign(record.links, clickMap);
     save(db);

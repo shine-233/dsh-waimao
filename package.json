@@ -1,6 +1,6 @@
 {
   "name": "dsh-waimao",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "外贸获客插件 for DeepSeek Harness (dsh): 3-layer Google lead search → contact extraction → ICP-aware rule+AI scoring → email finder/verifier → cold emails (spintax, daily cap, dry-run, threading, open/click tracking) → IMAP reply scan with AI classification → follow-up sequences → CRM pipeline → SOP stage machine with human approval gates → knowledge base → website monitoring → inbox warmup → deliverability checks → cron jobs → WhatsApp broadcast/media/quotes. 零依赖。",
   "type": "module",
   "scripts": {

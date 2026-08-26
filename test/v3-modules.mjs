@@ -21,6 +21,58 @@ await assert.rejects(() => imap.imapLogin({}), /IMAP 未配置/);
 assert.equal(typeof imap.imapFetchMessage, 'function');
 assert.equal(typeof imap.imapProbe, 'function');
 
+/* ---------- IMAP 头块提取：头值含括号不得截断 ---------- */
+const headerText = 'Message-ID: <abc@mail.test>\r\nFrom: "Foo (Trading Co.)" <a@b.com>\r\nSubject: Re: quote (2)\r\n\r\n';
+const fetchResponse =
+  `* 1 FETCH (BODY[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT)] {${Buffer.byteLength(headerText)}}\r\n${headerText} BODY[TEXT]<0> {5}\r\nHello)\r\nA003 OK done`;
+// 用假 session 直接喂 fixture
+const msg = await imap.imapFetchMessage({ exec: async () => fetchResponse }, 1);
+assert.equal(msg.messageId, '<abc@mail.test>', '含括号的 From 不得截断 Message-ID');
+assert.ok(msg.from.includes('a@b.com'), 'From 应完整解析');
+// 无字面量标记的兜底路径
+assert.ok(imap.extractHeaderBlock('X BODY[HEADER.FIELDS (FROM)]\r\nFrom: x@y.z\r\n)').includes('x@y.z'));
+
+/* ---------- QP 解码：多字节 UTF-8 必须重组为中文 ---------- */
+const qpBody = '=E4=B8=AD=E6=96=87 test';
+const qpHeaders = 'Message-ID: <qp@mail.test>\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n';
+const qpResponse =
+  `* 2 FETCH (BODY[HEADER.FIELDS (MESSAGE-ID CONTENT-TRANSFER-ENCODING)] {${Buffer.byteLength(qpHeaders)}}\r\n${qpHeaders} BODY[TEXT]<0> {${Buffer.byteLength(qpBody)}}\r\n${qpBody})\r\nA004 OK done`;
+const qpMsg = await imap.imapFetchMessage({ exec: async () => qpResponse }, 2);
+assert.ok(qpMsg.body.includes('中文'), `QP 中文应正确解码, got: ${qpMsg.body}`);
+assert.ok(qpMsg.body.includes('test'), 'QP 正文 ASCII 部分应保留');
+
+/* ---------- 退订关键词（页脚承诺的 STOP/ALTO/PARAR） ---------- */
+assert.equal(classifyReply('STOP').category, 'unsubscribe');
+assert.equal(classifyReply('PARAR', 'Re: offer').category, 'unsubscribe');
+assert.equal(classifyReply('ALTO!').category, 'unsubscribe');
+assert.notEqual(classifyReply('We will stop ordering next quarter due to inventory').category, 'unsubscribe', '正常商务句不得误判退订');
+
+/* ---------- 域名分类：按域后缀对齐，x.com 不再误杀 wix/netflix ---------- */
+const { classify } = await import('../dsh/enrich/classify.js');
+assert.equal(classify({ url: 'https://www.wix.com/template' }).keep, true, 'wix.com 不是社媒');
+assert.equal(classify({ url: 'https://www.netflix.com' }).keep, true, 'netflix.com 不是社媒');
+assert.equal(classify({ url: 'https://x.com/someone' }).kind, 'social');
+assert.equal(classify({ url: 'https://www.x.com/someone' }).kind, 'social');
+assert.equal(classify({ url: 'https://facebook.com/page' }).kind, 'social');
+assert.equal(classify({ url: 'https://www.alibaba.com/u/xyz' }).kind, 'b2b-platform');
+assert.equal(classify({ url: 'https://www.linkedin.com/jobs/view/1' }).kind, 'job');
+
+/* ---------- 联系人抽取：占位域名过滤作用在域名上 ---------- */
+const { extractContacts } = await import('../dsh/enrich/contacts.js');
+const extracted = extractContacts('<a href="mailto:info@example.com">mail</a><a href="mailto:buy@real-buyer.example">x</a>');
+assert.ok(!extracted.emails.includes('info@example.com'), 'example.com 占位域名应被过滤');
+assert.ok(extracted.emails.includes('buy@real-buyer.example'));
+
+/* ---------- IMAP 日期格式（RFC: DD-Mon-YYYY） ---------- */
+assert.equal(imap.imapDate(new Date(Date.UTC(2026, 7, 26))), '26-Aug-2026');
+
+/* ---------- CSV 公式注入 + vCard 转义 ---------- */
+const csvMod = await import('../dsh/csv.js');
+assert.ok(csvMod.toCsv(['公司'], [{ '公司': '=HYPERLINK("http://evil")' }]).includes("'=HYPERLINK"), '公式开头应加前缀防注入');
+const vc = csvMod.toVCard({ company: 'A,B; C\\D', market: 'mx; tier 高', contacts: {} });
+assert.ok(vc.includes('mx\\; tier 高'), `vCard NOTE 分号需转义: ${vc.split('\r\n').find((l) => l.startsWith('NOTE'))}`);
+assert.ok(vc.includes('N:A B  C D;;;;'), `vCard 需有 N 字段(公司名分隔符已被空格替代): ${vc.split('\r\n').find((l) => l.startsWith('N:'))}`);
+
 /* ---------- 抑制列表 ---------- */
 const suppress = await import('../dsh/suppress.js');
 const testEmail = `suppress-test-${Date.now()}@example.com`;

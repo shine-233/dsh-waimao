@@ -87,17 +87,29 @@ export const FOLLOW_UPS = [
   {
     day: 3,
     subject: (p) => `Re: ${p} supply`,
-    body: { en: (c) => `Hi ${c.name || 'there'},\n\nJust floating this up in case it got buried. Catalog and FOB list are ready whenever you are.\n\nBest,\n${c.me}`, es: (c) => `Hola ${c.name || 'que tal'},\n\nRetomo el mensaje por si quedó pendiente. El catálogo y precios FOB están listos cuando guste.\n\nSaludos,\n${c.me}` },
+    body: {
+      en: (c) => `Hi ${c.name || 'there'},\n\nJust floating this up in case it got buried. Catalog and FOB list are ready whenever you are.\n\nBest,\n${c.me}`,
+      es: (c) => `Hola ${c.name || 'que tal'},\n\nRetomo el mensaje por si quedó pendiente. El catálogo y precios FOB están listos cuando guste.\n\nSaludos,\n${c.me}`,
+      pt: (c) => `Olá ${c.name || 'tudo bem'},\n\nRetomando o contato, caso tenha ficado pendente. O catálogo e a lista de preços FOB estão prontos quando quiser.\n\nAtenciosamente,\n${c.me}`,
+    },
   },
   {
     day: 7,
     subject: (p) => `${p} — catalog + price list attached`,
-    body: { en: (c) => `Hi ${c.name || 'there'},\n\nAttaching our catalog. If ${c.product} is not your line, happy to refer you to someone who buys from us regularly.\n\nBest,\n${c.me}`, es: (c) => `Hola ${c.name || 'que tal'},\n\nAdjunto nuestro catálogo. Si ${c.product} no es su rubro, con gusto le referimos a alguien que nos compra habitualmente.\n\nSaludos,\n${c.me}` },
+    body: {
+      en: (c) => `Hi ${c.name || 'there'},\n\nAttaching our catalog. If ${c.product} is not your line, happy to refer you to someone who buys from us regularly.\n\nBest,\n${c.me}`,
+      es: (c) => `Hola ${c.name || 'que tal'},\n\nAdjunto nuestro catálogo. Si ${c.product} no es su rubro, con gusto le referimos a alguien que nos compra habitualmente.\n\nSaludos,\n${c.me}`,
+      pt: (c) => `Olá ${c.name || 'tudo bem'},\n\nSegue nosso catálogo. Se ${c.product} não é o seu segmento, com prazer indicamos alguém que compra de nós regularmente.\n\nAtenciosamente,\n${c.me}`,
+    },
   },
   {
     day: 14,
     subject: (p) => `Last note re: ${p}`,
-    body: { en: (c) => `Hi ${c.name || 'there'},\n\nLast note from me — if sourcing ${c.product} is on your roadmap this quarter, reply "catalog" and I'll send it over. Otherwise I won't keep bothering you.\n\nBest,\n${c.me}`, es: (c) => `Hola ${c.name || 'que tal'},\n\nÚltima nota — si comprar ${c.product} está en sus planes este trimestre, responda "catálogo" y se lo envío. Si no, no insisto más.\n\nSaludos,\n${c.me}` },
+    body: {
+      en: (c) => `Hi ${c.name || 'there'},\n\nLast note from me — if sourcing ${c.product} is on your roadmap this quarter, reply "catalog" and I'll send it over. Otherwise I won't keep bothering you.\n\nBest,\n${c.me}`,
+      es: (c) => `Hola ${c.name || 'que tal'},\n\nÚltima nota — si comprar ${c.product} está en sus planes este trimestre, responda "catálogo" y se lo envío. Si no, no insisto más.\n\nSaludos,\n${c.me}`,
+      pt: (c) => `Olá ${c.name || 'tudo bem'},\n\nÚltima nota — se comprar ${c.product} está nos seus planos este trimestre, responda "catálogo" que eu envio. Caso contrário, não vou mais insistir.\n\nAtenciosamente,\n${c.me}`,
+    },
   },
 ];
 
@@ -105,10 +117,18 @@ export const FOLLOW_UPS = [
 export function firstEmail(ctx) {
   const lang = ctx.language ?? languageFor(ctx.market);
   const pack = T[lang] ?? T.en;
+  const vars = {
+    name: '',
+    company: '',
+    me: 'Sales',
+    // 不给默认值时模板会渲染出字面 "undefined"
+    features: 'factory direct, stable quality, fast lead time',
+    ...ctx,
+  };
   return {
     language: lang,
-    subject: pack.subject(ctx.product ?? 'our products', ctx.company ?? ''),
-    body: pack.body(ctx),
+    subject: pack.subject(vars.product ?? 'our products', vars.company),
+    body: pack.body(vars),
   };
 }
 

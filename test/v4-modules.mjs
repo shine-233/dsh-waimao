@@ -26,6 +26,8 @@ const cfgFile = `${cfgDir}\\config.json`;
 let cfg = {};
 try { cfg = JSON.parse(readFileSync(cfgFile, 'utf8').replace(/^\uFEFF/, '')); } catch {}
 cfg.track = { publicBaseUrl: 'https://track.test.example', secret: 'test-secret-v4' };
+// 测试期间强制 dry_run 总闸开着：任何路径都不允许真实发信
+cfg.smtp = Object.assign({}, cfg.smtp, { dryRun: true });
 writeFileSync(cfgFile, JSON.stringify(cfg));
 
 const track = await import('../dsh/track.js');
@@ -75,7 +77,9 @@ assert.equal(warmup.rampCap(14, 30), 15);
 assert.equal(warmup.rampCap(60, 30), 30, '封顶');
 assert.equal(warmup.rampCap(400, 10), 10, '自定义封顶');
 assert.ok(warmup.WARMUP_TAG.includes('waimao-warmup'));
-await assert.rejects(() => warmup.runWarmupRound({}), /预热未配置/);
+// dry_run 总闸优先：即使未配置伙伴账号，总闸开着时也直接跳过而不是报错
+const warmupRoundV4 = await warmup.runWarmupRound({});
+assert.ok(warmupRoundV4.skipped !== undefined, 'dry_run=true 时预热应直接跳过');
 
 /* ---------- 送达率（真实 DNS，google.com 基本必过） ---------- */
 const { deliverabilityCheck } = await import('../dsh/deliverability.js');

@@ -1,6 +1,10 @@
 // 通用 CSV（UTF-8 BOM，Excel 友好）。
 export function csvEscape(value) {
-  const text = String(value ?? '');
+  let text = String(value ?? '');
+  // Excel 公式注入防护：网页抓来的公司名/标题以 =+-@ 开头时会被当公式执行
+  if (/^[=+\-@\t\r]/.test(text)) {
+    text = `'${text}`;
+  }
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
@@ -40,10 +44,13 @@ export function crmRow(lead) {
 
 /** RFC6350 vCard（手机通讯录可直接导入，WhatsApp 加联系人神器）。 */
 export function toVCard(lead) {
+  // vCard 值转义：\ , ; 和换行都是结构字符
+  const esc = (value) =>
+    String(value ?? '').replace(/\\/g, '\\\\').replace(/[,;]/g, (c) => `\\${c}`).replace(/\r?\n/g, '\\n');
   const name = (lead.company || lead.domain || 'Unknown').replace(/[;,\\]/g, ' ');
-  const lines = ['BEGIN:VCARD', 'VERSION:3.0', `FN:${name}`, `ORG:${name}`];
+  const lines = ['BEGIN:VCARD', 'VERSION:3.0', `N:${esc(name)};;;;`, `FN:${esc(name)}`, `ORG:${esc(name)}`];
   if (lead.market) {
-    lines.push(`NOTE:[waimao] ${lead.market} ${lead.tier ?? ''} ${lead.score ?? ''}分`);
+    lines.push(`NOTE:${esc(`[waimao] ${lead.market} ${lead.tier ?? ''} ${lead.score ?? ''}分`)}`);
   }
   for (const email of (lead.contacts?.emails ?? []).slice(0, 3)) {
     lines.push(`EMAIL;TYPE=WORK:${email}`);

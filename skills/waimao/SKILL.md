@@ -27,14 +27,14 @@ description: 外贸获客方法论：三层搜索→线索加工(提取/过滤/I
 - **日上限**：真实发送受 smtp.dailyCap 限制（默认300，新域名建议 20-30），达到上限会拒绝发送，这是保护域名信誉，不要建议绕过
 - **Spintax**：模板里可用 {a|b|c} 变体，发送时随机选一项，群发时每封略有差异；不含 | 的花括号不受影响
 - **群发**：`wa_broadcast` 默认 dry_run；真实发送有每日上限+随机间隔+3连败熔断，提醒用户封号风险
-- **报价**：`quote_pdf` 生成英文 PDF（先 kb_search 查报价政策），可 `wa_send_media` 发送，自动记 CRM 活动、状态改 quoted
+- **报价**：`quote_pdf` 生成英文 PDF（先 kb_search 查报价政策），可 `wa_send_media` 发送，自动记 CRM 活动；已回复(replied)的线索报价后状态自动改 quoted
 - **客户回复**：`email_scan_replies` 自动检测（cron 也跑）并分类落库；WhatsApp 消息走审核台 `wa_review_queue` → `wa_reply`。状态改 replied 自动停序列
 - **背调**：重要客户先 `company_dossier`（域名年龄<6个月标警、技术栈、招聘信号）
 - **时机**：高价值线索 `monitor_watch` 盯官网，变化=触达时机
-- **合规**：退订地址自动进抑制列表，发送被强制拦截；不要建议用户绕过
+- **合规**：退订地址自动进抑制列表（买家回复 STOP/ALTO/PARAR 也认），发送被强制拦截；不要建议用户绕过
 - **度量**：定期 `stats_report` 看分层回复率+打开率/点击率——极高分层应显著高于低分层，否则校准评分；打开率低=送达率/标题问题，打开高回复低=内容问题
 - **送达率**：首次真实发信前必跑 `deliverability_check`（SPF/DKIM/DMARC/MX），有缺口先修
-- **预热**：新域名/新账号先 `warmup_status {action:"run"}` 跑几天互动预热；发送受爬坡闸门限制（第1周5封/天）
+- **预热**：新域名/新账号先 `warmup_status {action:"run"}` 跑几天互动预热；预热爬坡（第1周5封/天）只约束预热邮件本身，业务发送受 smtp.dailyCap 保护
 - **追踪**：用户配置 track.publicBaseUrl 后自动生效；smtp.plainText 开着时不注入追踪（纯文本投递率更好）。解读数据时打开率≠阅读率（有邮件客户端预取）
 - **定时任务**：`cron_status` 查看全部任务；`cron_status {run:"replyScan"}` 手动触发
 
@@ -50,5 +50,6 @@ description: 外贸获客方法论：三层搜索→线索加工(提取/过滤/I
 | SOP | sop_create / sop_next / sop_review / sop_approve / sop_status |
 | 知识 | kb_search / kb_upsert / kb_list |
 | WhatsApp | wa_sync / wa_review_queue / wa_reply / wa_send_text / wa_send_media / wa_broadcast |
-| 报价 | quote_pdf |
-| 运维 | cron_status / audit_query |
+| 报价 | quote_pdf / proforma_pdf(PI发票) / price_calc(Incoterm成本+利润率) |
+| 内容 | market_scan(蓝海选国) / video_script(口播脚本) |
+| 运维 | cron_status / audit_query / data_backup(全量备份) / warmup_status / deliverability_check / template_save / template_list / template_delete |
