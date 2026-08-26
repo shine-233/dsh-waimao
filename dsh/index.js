@@ -485,6 +485,7 @@ function registerEmailComposeTool(ctx) {
       type: 'object',
       properties: {
         lead_id: { type: 'string', description: 'CRM 线索ID' },
+        contact_name: { type: 'string', description: '联系人姓名（从搜索结果/LinkedIn 拿到时传入，信里会称呼名字）' },
         language: { type: 'string', enum: ['en', 'es', 'pt'], description: '缺省按市场自动选' },
         use_ai: { type: 'boolean', description: '默认true' },
         kind: { type: 'string', enum: ['first', 'followup'], description: '首封/跟进，默认first' },
