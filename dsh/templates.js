@@ -27,8 +27,11 @@ export function saveTemplate({ name, language = 'en', subject, body, tags = [] }
   if (!String(name ?? '').trim() || !String(subject ?? '').trim() || !String(body ?? '').trim()) {
     throw new Error('template needs name/subject/body');
   }
+  // 先截断再查重：存储会 slice(0,60)，查重用全名会让两个前 60 字符相同
+  // 的不同名字互相穿透、或同名长名字重复入库
+  const normalizedName = String(name).trim().slice(0, 60);
   const list = load();
-  const existing = list.find((item) => item.name.toLowerCase() === String(name).toLowerCase());
+  const existing = list.find((item) => item.name.toLowerCase() === normalizedName.toLowerCase());
   const now = new Date().toISOString();
   if (existing) {
     existing.subject = String(subject);
@@ -42,7 +45,7 @@ export function saveTemplate({ name, language = 'en', subject, body, tags = [] }
   }
   const template = {
     id: `TPL${randomUUID().slice(0, 6)}`,
-    name: String(name).slice(0, 60),
+    name: normalizedName,
     language,
     subject: String(subject),
     body: String(body),

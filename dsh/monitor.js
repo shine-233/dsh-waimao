@@ -33,9 +33,9 @@ export function watch(leadId, { url, note } = {}) {
   if (!lead) {
     throw new Error(`lead not found: ${leadId}`);
   }
-  const target = url || `https://${lead.domain || ''}/`;
-  if (!/^https?:\/\//.test(target)) {
-    throw new Error(`no valid url to watch (lead domain empty)`);
+  const target = url || (lead.domain ? `https://${lead.domain}/` : '');
+  if (!/^https?:\/\/.+/.test(target)) {
+    throw new Error(`no valid url to watch（线索没有 domain，请传 url 参数）`);
   }
   const db = load();
   let entry = db.targets.find((item) => item.leadId === leadId);
@@ -93,22 +93,31 @@ async function checkTarget(entry, signal) {
   return result;
 }
 
-/** 检查全部监控目标（cron 用）。 */
+/** 检查全部监控目标（cron 用）。哈希更新合并回"重新加载"的最新状态，
+ *  避免长时间 await 期间用陈旧 db 覆盖掉期间新增/删除的监控目标。 */
 export async function checkAll({ limit = 50, signal } = {}) {
-  const db = load();
-  const due = db.targets.filter((entry) => !entry.paused).slice(0, limit);
+  const due = load().targets.filter((entry) => !entry.paused).slice(0, limit);
   const results = [];
   for (const entry of due) {
     if (signal?.aborted) {
       break;
     }
     try {
-      results.push(await checkTarget(entry, signal));
+      const result = await checkTarget(entry, signal);
+      // 每次检查后立即持久化该目标的哈希（读-改-写窗口最小化）
+      const fresh = load();
+      const live = fresh.targets.find((item) => item.leadId === entry.leadId && item.url === entry.url);
+      if (live) {
+        live.hash = entry.hash;
+        live.lastChecked = entry.lastChecked;
+        live.changes = entry.changes;
+        save(fresh);
+      }
+      results.push(result);
     } catch (error) {
       results.push({ leadId: entry.leadId, ok: false, error: String(error?.message ?? error).slice(0, 120) });
     }
   }
-  save(db);
   return {
     checked: results.length,
     changed: results.filter((item) => item.changed),

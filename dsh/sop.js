@@ -157,11 +157,12 @@ export function nextStep(taskId, prereq = {}) {
       return { task: advance(task, `${task.drafts.length} 封草稿待审`), hint: '人工审批：sop_review 列出草稿，sop_approve 逐封批准' };
     case 'approval':
       {
-        const pending = task.drafts.filter((draft) => draft.approved?.hash !== draft.hash);
+        // 驳回过的草稿是"已决策"，不算待审——否则一封被驳的草稿会把门永久卡死
+        const pending = task.drafts.filter((draft) => !draft.rejected && draft.approved?.hash !== draft.hash);
         if (pending.length > 0) {
           throw new Error(`approval 未完成：还有 ${pending.length} 封草稿未批准（fail-closed，不可跳过）`);
         }
-        return { task: advance(task, '全部草稿已批准'), hint: '调用 email_send / wa_reply 执行触达（受 dry_run 约束），然后 sop_next' };
+        return { task: advance(task, '全部草稿已批准'), hint: '调用 email_send 执行触达（受 dry_run 与首触审批闸约束），然后 sop_next' };
       }
     case 'outreach':
       if (prereq.sent) {
@@ -223,6 +224,7 @@ export function reviewDraft(taskId, draftId, { approve, actor = 'user' } = {}) {
   }
   if (approve) {
     draft.approved = { ts: new Date().toISOString(), hash: currentHash, actor };
+    draft.rejected = false;
     audit('sop.approve', { task_id: taskId, draft_id: draftId, hash: currentHash }, actor);
   } else {
     draft.approved = null;
@@ -230,8 +232,29 @@ export function reviewDraft(taskId, draftId, { approve, actor = 'user' } = {}) {
     audit('sop.reject', { task_id: taskId, draft_id: draftId }, actor);
   }
   saveTask(task);
-  const pending = task.drafts.filter((item) => item.approved?.hash !== item.hash).length;
+  const pending = task.drafts.filter((item) => !item.rejected && item.approved?.hash !== item.hash).length;
   return { task, pending };
+}
+
+/** 移除草稿（驳回后不想要了就删掉，别让死草稿占着审批门）。 */
+export function removeDraft(taskId, draftId, actor = 'agent') {
+  const task = getTask(taskId);
+  const index = task.drafts.findIndex((item) => item.id === draftId);
+  if (index === -1) {
+    throw new Error(`draft not found: ${draftId}`);
+  }
+  task.drafts.splice(index, 1);
+  saveTask(task);
+  audit('sop.draft.remove', { task_id: taskId, draft_id: draftId }, actor);
+  return { removed: true, remaining: task.drafts.length };
+}
+
+/** 真实发送成功后回写触达记录（email_send 调用），结案报告据此统计。 */
+export function recordOutreach(taskId, entry) {
+  const task = getTask(taskId);
+  task.outreach.push({ ts: new Date().toISOString(), ...entry });
+  saveTask(task);
+  return task;
 }
 
 /** 外发前校验：草稿必须存在批准凭证且哈希与当前内容一致。 */

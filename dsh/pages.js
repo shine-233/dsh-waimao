@@ -239,7 +239,7 @@ function toastErr(e){toast(String(e&&e.message||e),'err',6000);}
 
 /* ---- fetch JSON helper ---- */
 function api(url,opt){opt=opt||{};opt.headers=Object.assign({'content-type':'application/json'},opt.headers||{});
-  return fetch(url,opt).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})});}
+  return fetch(url,opt).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})}).catch(function(e){return{ok:false,j:{error:String(e)}}});}
 
 /* ---- Modal ---- */
 function modal(html,onOpen){var back=document.getElementById('modalBack');
@@ -453,7 +453,7 @@ function leadsPage() {
     `(r.advice?'<div class="muted" style="font-size:12.5px;margin-top:6px">'+esc(r.advice)+'</div>':'') +` +
     `'</div>';});` +
     `html+='</div>';` +
-    `var box=document.createElement('div');box.innerHTML=html;document.getElementById('result').appendChild(box);}` +
+    `document.getElementById('result').innerHTML=html;}` +
     `function exportCsv(runId){window.open('api/leads/export.csv?run='+encodeURIComponent(runId),'_blank');}` +
     `function copyLinks(){var run=window.__lastRun||{};var urls=(run.results||[]).map(function(it){return it.url});` +
     `navigator.clipboard.writeText(urls.join('\\n')).then(function(){toast('已复制 '+urls.length+' 条链接')});}` +
@@ -622,7 +622,33 @@ function crmPage() {
     `(l.lastReply?'<div class="panel" style="padding:12px 14px;margin-bottom:12px"><b class="ok">最近回复 ['+esc(l.lastReply.category)+']</b><div class="muted" style="font-size:12.5px;margin-top:4px">'+esc(l.lastReply.summary)+'</div></div>':'') +` +
     `'<div class="muted" style="font-size:12px;margin-bottom:5px">动作时间线</div>' +` +
     `acts.map(function(a){return '<div style="padding:7px 0;border-bottom:1px solid rgba(39,39,42,.6);font-size:12.5px"><span class="dim mono">'+a.ts.slice(5,16)+'</span> '+esc(a.note)+'</div>'}).join('') || '<span class="dim">无</span>';` +
+    `var foot=document.createElement('div');foot.className='mt';` +
+    `foot.innerHTML='<div class="flex" style="gap:8px"><button class="mini" id="dComposeBtn">生成开发信</button>'+(l.sequence?'':'<button class="mini ghost" id="dSeqBtn">启动序列</button>')+'</div><div id="dCompose" class="mt"></div>';` +
+    `document.getElementById('dBody').appendChild(foot);` +
+    `document.getElementById('dComposeBtn').onclick=function(){drawerCompose(id,this);};` +
+    `var seqBtn=document.getElementById('dSeqBtn');` +
+    `if(seqBtn){seqBtn.onclick=function(){drawerSequence(id,this);};}` +
     `document.getElementById('drawer').classList.add('show');}` +
+    `function drawerCompose(id,btn){btn.disabled=true;btn.innerHTML='生成中…';` +
+    `api('api/crm/compose',{method:'POST',body:JSON.stringify({id:id})})` +
+    `.then(function(r){btn.disabled=false;btn.innerHTML='生成开发信';` +
+    `if(!r.ok){toast(r.j.error||'生成失败','err');return;}var d=r.j;` +
+    `var box=document.getElementById('dCompose');` +
+    `box.innerHTML='<div class="field mt"><label>主题</label><input id="dc-subject"></div>' +` +
+    `'<div class="field mt"><label>正文（可编辑后发送；dry-run 开着时只存预览）</label><textarea id="dc-body" style="min-height:150px"></textarea></div>' +` +
+    `'<div class="flex mt"><span class="dim">'+esc(d.generatedBy||'')+'</span><button id="dc-send">发送</button></div>';` +
+    `document.getElementById('dc-subject').value=d.subject||'';` +
+    `document.getElementById('dc-body').value=d.body||'';` +
+    `document.getElementById('dc-send').onclick=function(){drawerSend(id,this);};});}` +
+    `function drawerSend(id,btn){btn.disabled=true;btn.innerHTML='发送中…';` +
+    `api('api/crm/send-email',{method:'POST',body:JSON.stringify({id:id,subject:document.getElementById('dc-subject').value,body:document.getElementById('dc-body').value})})` +
+    `.then(function(r){btn.disabled=false;btn.innerHTML='发送';` +
+    `if(!r.ok){toast(r.j.error||'发送失败','err');return;}` +
+    `toast(r.j.dryRun?'dry-run：草稿已存盘':'已发送');closeDrawer();load();});}` +
+    `function drawerSequence(id,btn){btn.disabled=true;` +
+    `api('api/crm/sequence-start',{method:'POST',body:JSON.stringify({id:id})})` +
+    `.then(function(r){btn.disabled=false;if(!r.ok){toast(r.j.error||'启动失败','err');return;}` +
+    `toast('序列已启动 Day0/3/7/14');closeDrawer();load();});}` +
     `function closeDrawer(){document.getElementById('drawer').classList.remove('show');}` +
     `/* ---- 定价计算器（实时联动） ---- */` +
     `function openCalc(){` +
@@ -686,25 +712,27 @@ function reviewPage() {
     `'<div class="msg status mt" id="tip-'+esc(m.id)+'"></div></div>';});` +
     `box.innerHTML=html;});}` +
     `document.getElementById('refresh').onclick=loadQueue;` +
-    `function tipOf(id){return document.getElementById('tip-'+CSS.escape(id));}` +
+    `function tipOf(id){return document.getElementById('tip-'+id);}` +
     `function draft(id,btn){btn.disabled=true;` +
-    `document.getElementById('draftWrap-'+CSS.escape(id)).innerHTML='<div class="bubble me typing"><i></i><i></i><i></i></div>';` +
+    `document.getElementById('draftWrap-'+id).innerHTML='<div class="bubble me typing"><i></i><i></i><i></i></div>';` +
     `api('api/review/draft',{method:'POST',body:JSON.stringify({id:id})})` +
-    `.then(function(r){btn.disabled=false;var wrap=document.getElementById('draftWrap-'+CSS.escape(id));` +
+    `.then(function(r){btn.disabled=false;var wrap=document.getElementById('draftWrap-'+id);` +
     `if(!r.ok){wrap.innerHTML='';tipOf(id).innerHTML='<span class="err">'+esc(r.j.error)+'</span>';return;}` +
     `wrap.innerHTML='<div class="bubble me">'+esc(r.j.draft)+'<div class="bmeta">AI 草稿 · 可编辑</div></div>' +` +
     `'<textarea class="mt" style="width:100%;min-height:70px" id="ta-'+esc(id)+'">'+esc(r.j.draft)+'</textarea>';` +
     `toast('草稿已生成');});}` +
-    `function send(id,btn){var ta=document.getElementById('ta-'+CSS.escape(id));var text=ta?ta.value.trim():'';` +
+    `function send(id,btn){var ta=document.getElementById('ta-'+id);var text=ta?ta.value.trim():'';` +
     `if(!text){toast('先写回复（可先 AI 草稿）','warn');return;}btn.disabled=true;` +
     `api('api/review/send',{method:'POST',body:JSON.stringify({id:id,text:text})})` +
     `.then(function(r){btn.disabled=false;` +
     `if(!r.ok){tipOf(id).innerHTML='<span class="err">'+esc(r.j.error)+'</span>';return;}` +
-    `var wrap=document.getElementById('draftWrap-'+CSS.escape(id));` +
+    `var wrap=document.getElementById('draftWrap-'+id);` +
     `wrap.innerHTML='<div class="bubble me">'+esc(text)+'<div class="bmeta">已发送 ✓</div></div>';` +
     `tipOf(id).innerHTML='<span class="ok">发送成功</span>';toast('已发送');}).catch(function(e){btn.disabled=false;toastErr(e);});}` +
     `function ignore(id,btn){api('api/review/ignore',{method:'POST',body:JSON.stringify({id:id})})` +
-    `.then(function(){var card=document.getElementById('m-'+CSS.escape(id));if(card){card.style.opacity=.35;}});}` +
+    `.then(function(r){var card=document.getElementById('m-'+id);` +
+    `if(!r.ok){toast(r.j.error||'忽略失败','err');return;}` +
+    `if(card){card.style.opacity=.35;}toast('已忽略');});}` +
     `loadStatus();loadQueue();` +
     `</script>` +
     FOOTER
@@ -777,6 +805,7 @@ const SETTINGS_SECTIONS = [
     ['staleDays', '停跟进天数', 'number'],
   ] },
   { key: 'wa', title: '群发频控', fields: [
+    ['dryRun', 'WA 总闸', 'select', [['true', 'true（安全，只记录）'], ['false', 'false（真实发送）']]],
     ['dailyBroadcastCap', '每日上限', 'number'],
     ['minDelaySec', '最小间隔(秒)', 'number'],
     ['maxDelaySec', '最大间隔(秒)', 'number'],
@@ -857,6 +886,11 @@ function settingsPage() {
     `if(r.j.pairingCode){html+='<div class="mt mono" style="font-size:18px">配对码: <b>'+esc(r.j.pairingCode)+'</b></div>';}` +
     `html+='<div class="muted" style="font-size:12px">WhatsApp → 设置 → 已关联的设备 → 关联设备</div>';` +
     `box.innerHTML=html;` +
+    `var polls=0;var timer=setInterval(function(){polls+=1;` +
+    `if(polls>20){clearInterval(timer);return;}` +
+    `api('api/evolution/state').then(function(s){` +
+    `if(s.ok&&(s.j.connected||s.j.state==='connected'||s.j.state==='open')){clearInterval(timer);st.innerHTML='<span class="ok">已连接</span>';box.innerHTML='';toast('WhatsApp 已连接');}` +
+    `});},3000);` +
     `}).catch(function(e){btn.disabled=false;btn.innerHTML='扫码接入 WhatsApp';toastErr(e);});}` +
     `</script>` +
     FOOTER

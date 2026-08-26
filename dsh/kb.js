@@ -34,6 +34,14 @@ export function upsert({ type, title, content, tags = [], source = 'user' }) {
   if (!String(title ?? '').trim() || !String(content ?? '').trim()) {
     throw new Error('kb entry needs title and content');
   }
+  // 密钥守卫放在存储层：title/tags/content 全查（原来只在工具层查 content，
+  // kb_upsert({title:"api_key=sk-xxx"}) 直接入库落盘）
+  const secretHit = /(?:sk-[A-Za-z0-9]{16,}|api[_-]?key\s*[:=]\s*\S+|password\s*[:=]\s*\S+|BEGIN (?:RSA )?PRIVATE KEY)/i.test(
+    JSON.stringify([type, title, content, tags]),
+  );
+  if (secretHit) {
+    throw new Error('kb 条目疑似包含密钥/凭据，拒绝写入（知识库会明文落盘）');
+  }
   const db = load();
   const existing = db.entries.find(
     (entry) => entry.type === type && entry.title.toLowerCase() === String(title).toLowerCase(),

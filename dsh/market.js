@@ -54,11 +54,12 @@ export async function scanMarkets({ product, markets, perMarket = 8, signal } = 
   const scored = results
     .filter((item) => !item.error)
     .map((item) => {
-      // 机会分：买家信号为主，供给噪声为负；结果量适中加分（说明有市场活动）
+      // 机会分：买家信号为主，供给噪声为负；结果量适中加分（说明有市场活动）。
+      // 钳制到 0-100：小样本(1条结果1命中=300分"必蓝海")的统计爆炸要压掉
       const demand = item.buyerSignals * 3;
       const noise = item.platformNoise * 2 + Math.max(0, item.results - 6);
-      const opportunity = Math.max(0, Math.round(((demand - noise) / Math.max(item.results, 1)) * 100));
-      return { ...item, opportunity };
+      const opportunity = Math.min(100, Math.max(0, Math.round(((demand - noise) / Math.max(item.results, 1)) * 100)));
+      return { ...item, opportunity, lowSample: item.results < 3 };
     })
     .sort((a, b) => b.opportunity - a.opportunity);
 
@@ -67,7 +68,7 @@ export async function scanMarkets({ product, markets, perMarket = 8, signal } = 
     market: item.market,
     label: item.label,
     opportunity: item.opportunity,
-    verdict: item.opportunity >= 60 ? '🔵 蓝海' : item.opportunity >= 30 ? '🟡 可试' : '🔴 红海/信号弱',
+    verdict: (item.lowSample ? '⚪ 样本太少，' : '') + (item.opportunity >= 60 ? '🔵 蓝海' : item.opportunity >= 30 ? '🟡 可试' : '🔴 红海/信号弱'),
     results: item.results,
     buyerSignals: item.buyerSignals,
     platformNoise: item.platformNoise,

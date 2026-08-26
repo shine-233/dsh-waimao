@@ -239,7 +239,19 @@ export async function waInboxJob() {
       continue;
     }
     const entries = evolution.normalizeHistory(history, jid).filter((item) => !item.fromMe);
-    added += waStore.upsertIncoming(entries).added;
+    const { added: newCount } = waStore.upsertIncoming(entries);
+    added += newCount;
+    if (newCount > 0) {
+      // 新买家消息自动关联 CRM 线索时间线（按手机号尾号匹配）
+      for (const entry of entries.slice(-newCount)) {
+        const lead = crm.findLeadByPhone(entry.chatJid ?? jid);
+        if (lead) {
+          try {
+            crm.addActivity(lead.id, { type: 'wa', note: `WA买家消息[${entry.pushName ?? '未知'}]: ${String(entry.text ?? '').slice(0, 100)}`, actor: 'cron' });
+          } catch {}
+        }
+      }
+    }
   }
   return added > 0 ? `+${added} new buyer messages` : 'inbox clean';
 }

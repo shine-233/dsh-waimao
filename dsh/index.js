@@ -605,6 +605,7 @@ function registerEmailSendTool(ctx) {
       // 只在无 SOP 时生效——防止审批后被偷换内容。
       let finalSubject = String(args?.subject ?? '');
       let finalBody = String(args?.body ?? '');
+      let approvedVia = null;
       if (!finalSubject.trim() && !finalBody.trim()) {
         throw new Error('subject 和 body 不能同时为空（拒绝发空邮件）');
       }
@@ -638,6 +639,12 @@ function registerEmailSendTool(ctx) {
           status: ['new', 'qualified'].includes(lead.status) ? 'contacted' : lead.status,
           ...(result.messageId ? { lastMessageId: result.messageId } : {}),
         }, { activityNote: `开发信已发送${isFirstEmail ? '(首封)' : '(跟进)'}: ${finalSubject}` });
+        // 回写 SOP 触达记录，否则结案报告的触达统计恒为 0
+        if (args?.task_id && args?.draft_id) {
+          try {
+            sopMod.recordOutreach(args.task_id, { leadId: lead.id, channel: 'email', to, subject: finalSubject });
+          } catch {}
+        }
       } else {
         crmMod.addActivity(lead.id, { type: 'email-draft', note: `[dry-run] 预览: ${finalSubject}` });
       }
@@ -945,20 +952,25 @@ function registerSopReviewTool(ctx) {
 function registerSopApproveTool(ctx) {
   ctx.tools.register({
     name: 'sop_approve',
-    description: '人工审批/驳回 SOP 草稿。批准凭证绑定当前内容哈希；草稿被改动后需重新审批。全部批准后 approval 阶段才放行。',
+    description: '人工审批/驳回/移除 SOP 草稿。批准凭证绑定当前内容哈希；草稿被改动后需重新审批。驳回的草稿不算待审（也可 remove 移除）。全部批准后 approval 阶段才放行。',
     parameters: {
       type: 'object',
       properties: {
         task_id: { type: 'string' },
         draft_id: { type: 'string' },
         approve: { type: 'boolean', description: 'true=批准 false=驳回' },
+        remove: { type: 'boolean', description: 'true=直接移除该草稿（与 approve 二选一）' },
       },
-      required: ['task_id', 'draft_id', 'approve'],
+      required: ['task_id', 'draft_id'],
     },
     timeoutMs: 15_000,
     isConcurrencySafe: () => false,
     presentCall: (args) => ({ card: 'generic', title: `sop_approve: ${args?.draft_id ?? ''}`, kind: 'approve', rawInput: args }),
     async execute(args) {
+      if (args?.remove === true) {
+        const result = sopMod.removeDraft(String(args?.task_id ?? ''), String(args?.draft_id ?? ''), 'user');
+        return { draftId: args?.draft_id, removed: true, remainingDrafts: result.remaining };
+      }
       const { task, pending } = sopMod.reviewDraft(String(args?.task_id ?? ''), String(args?.draft_id ?? ''), { approve: args?.approve === true, actor: 'user' });
       return { draftId: args?.draft_id, approved: args?.approve === true, pendingApprovals: pending, stage: task.stage };
     },
@@ -1027,9 +1039,7 @@ function registerKbUpsertTool(ctx) {
     isConcurrencySafe: () => true,
     presentCall: (args) => ({ card: 'generic', title: `kb_upsert: ${args?.title ?? ''}`, kind: 'update', rawInput: args }),
     async execute(args) {
-      if (/passw|token|secret|api[_-]?key/i.test(String(args?.content ?? ''))) {
-        throw new Error('知识库禁止写入密码/token/密钥类内容');
-      }
+      // 密钥守卫在 kb.upsert 存储层（覆盖 title/tags/content 全字段）
       const entry = kbMod.upsert({ type: args?.type, title: args?.title, content: args?.content, tags: args?.tags });
       return { id: entry.id, title: entry.title, version: entry.version };
     },
@@ -1289,7 +1299,13 @@ function registerWaBroadcastTool(ctx) {
       if (args?.dry_run !== false) {
         return { dryRun: true, wouldSend: uniqueTargets.length, budget, targets: uniqueTargets.slice(0, 20), hint: '确认无误后传 dry_run=false 真正发送' };
       }
+      waDryRunGate();
       const result = await evolutionMod.broadcast(uniqueTargets, { signal: exec?.signal, onProgress: (sent, total) => { if (sent % 10 === 0) { console.error(`[waimao] broadcast ${sent}/${total}`); } } });
+      // 群发结果回写 CRM 活动
+      for (const target of uniqueTargets) {
+        const lead = findLeadByPhone(target.number);
+        noteWaActivity(lead?.id ?? target.leadId, `WA群发: ${String(args?.text ?? '').slice(0, 80)}`);
+      }
       auditMod.audit('wa.broadcast', { total: uniqueTargets.length, ...result });
       return result;
     },
@@ -1334,7 +1350,8 @@ function registerQuotePdfTool(ctx) {
         leadTime: args?.lead_time ?? defaults.leadTime,
         payment: args?.payment ?? defaults.payment,
         validity: args?.validity ?? defaults.validity,
-        notes: args?.notes ?? defaults.notes,
+        // KB 报价政策真写进 PDF（此前只是查了一下回传 policyCited，PDF 里没有）
+        notes: [args?.notes ?? defaults.notes, kbPolicy ? `Per our sales policy: ${String(kbPolicy).slice(0, 180)}` : ''].filter(Boolean).join('\n') || undefined,
       });
       const file = join(EXPORT_DIR, quoteFileName(quoteNo));
       mkdirSync(EXPORT_DIR, { recursive: true });
@@ -2346,7 +2363,7 @@ function registerRoutes(scope) {
       const message = storeMod.getMessage(String(body.id ?? ''));
       if (!message) { httpMod.sendJson(res, 404, { error: `message not found: ${body.id}` }); return; }
       const history = storeMod.loadMessages().filter((item) => item.chatJid === message.chatJid).sort((a, b) => Date.parse(a.ts ?? 0) - Date.parse(b.ts ?? 0)).slice(-12);
-      const text = await draftMod.draftReply({ history, buyerName: message.name || message.sender });
+      const text = await draftMod.draftReply({ history, buyerName: message.name || message.sender, product: readConfig().icp?.product || undefined });
       storeMod.updateMessage(message.id, { draft: text, status: 'drafted' });
       httpMod.sendJson(res, 200, { id: message.id, draft: text });
     } catch (error) {
@@ -2363,6 +2380,7 @@ function registerRoutes(scope) {
       const text = String(body.text ?? '').trim();
       if (text === '') { httpMod.sendJson(res, 400, { error: 'text is empty' }); return; }
       if (message.chatJid.endsWith('@g.us')) { httpMod.sendJson(res, 400, { error: '群聊不支持自动发送' }); return; }
+      try { waDryRunGate(); } catch (error) { httpMod.sendJson(res, 400, { error: String(error?.message ?? error) }); return; }
       await evolutionMod.sendText(message.chatJid, text);
       storeMod.updateMessage(message.id, { status: 'sent', draft: text, sentAt: new Date().toISOString() });
       auditMod.audit('wa.send', { to: message.chatJid, via: 'review-page' }, 'user');

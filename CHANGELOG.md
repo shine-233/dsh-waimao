@@ -39,6 +39,14 @@
 - **每邮箱总上限 `smtp.mailboxTotalCap`**（学 Instantly 的 daily_limit_max）：业务+预热合计封顶——服务商只看邮箱当天总量，业务发得多时预热自动让路（预热预算 = min(爬坡上限, 总上限余量)）。此前预热完全不吃任何与业务相关的上限
 - 设置页同步两个新开关；email_send 工具描述如实说明闸门行为
 
+### 第三轮全量复审修复（WhatsApp 链路 / SOP / 前端 / 支持模块）
+- **WhatsApp 补上三大断裂**：① `wa.dryRun` 总闸（此前配好即真实外发，零闸门，与 cron 注释矛盾）；② wa_send_media 支持本地文件路径（限 exports/data 目录，quote_pdf 产物直接传——此前"配合报价单发送"根本接不通）；③ WA 收发自动按手机号尾号匹配 CRM 线索并记活动时间线（此前完全没有 CRM 回写）
+- **SOP 两处断线**：email_send 成功后回写 task.outreach（此前结案报告触达统计恒为 0/dryRunOnly）；驳回的草稿改为"已决策"不再永久卡死审批门，sop_approve 支持 remove 直接移除
+- **CSV 往返丢联系方式**：导入别名补齐自家中文表头（邮箱/WhatsApp/电话/LinkedIn）——此前导出的备份改完导回，联系方式全部静默丢失
+- **CRM 抽屉补操作按钮**：生成开发信→可编辑→发送、启动序列（三条后端路由此前是无人调用的悬空 API）
+- **market_scan 机会分钳制 0-100 + 小样本标注**（1 条结果 1 个命中=300 分"必蓝海"的统计爆炸）；monitor 拒绝空 domain 目标、checkAll 逐目标持久化（不再用陈旧 db 整体覆盖）；kb 密钥守卫下沉存储层覆盖 title/tags；templates 名字先截断再查重；群发熔断状态持久化+本地日界；审核台草稿带产品上下文；quote_pdf 的 KB 报价政策真写进 PDF 备注（此前只是查了没用于渲染）
+- **前端**：api() 全局 catch（403 空 body 不再白屏）、忽略按钮检查返回码、加工结果不再堆叠、QR 扫码后自动轮询连接状态、CSS.escape 误用 getElementById 修正
+
 ### 工具数
 48 → **50**（并行线加了 instantly_campaign_list / instantly_push_leads）；网页 4 → **5**
 

@@ -130,6 +130,8 @@ export const DEFAULT_CONFIG = {
     staleDays: 7, // 多少天没动作算停跟进
   },
   wa: {
+    // WA 总闸（与 smtp.dry_run 同思路）：true 时一切 WhatsApp 发送只记录不发出
+    dryRun: true,
     dailyBroadcastCap: 200, // 群发每日上限（防封号，宁低勿高）
     minDelaySec: 20, // 群发两条之间的最小间隔
     maxDelaySec: 90, // 最大间隔（随机化更安全）

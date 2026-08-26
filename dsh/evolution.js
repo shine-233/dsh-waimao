@@ -91,12 +91,18 @@ export async function sendMedia(number, { media, mediatype = 'document', filenam
 
 const BROADCAST_STATE = join(DATA_DIR, 'broadcast.json');
 
+/** 本地日期（群发日上限按本机时区翻转，不用 UTC——北京用户早8点重置是错的）。 */
+function localToday() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
 function loadBroadcastState() {
   try {
     const parsed = JSON.parse(readFileSync(BROADCAST_STATE, 'utf8'));
-    return parsed?.date === new Date().toISOString().slice(0, 10) ? parsed : { date: new Date().toISOString().slice(0, 10), sentToday: 0 };
+    return parsed?.date === localToday() ? { consecutiveFailures: 0, ...parsed, date: localToday() } : { date: localToday(), sentToday: 0, consecutiveFailures: 0 };
   } catch {
-    return { date: new Date().toISOString().slice(0, 10), sentToday: 0 };
+    return { date: localToday(), sentToday: 0, consecutiveFailures: 0 };
   }
 }
 
@@ -111,7 +117,7 @@ export function broadcastBudget() {
   const config = readConfig();
   const state = loadBroadcastState();
   const cap = config.wa?.dailyBroadcastCap ?? 200;
-  return { sentToday: state.sentToday, cap, remaining: Math.max(0, cap - state.sentToday) };
+  return { sentToday: state.sentToday, cap, remaining: Math.max(0, cap - state.sentToday), circuitOpen: (state.consecutiveFailures ?? 0) >= 3 };
 }
 
 /**
@@ -127,10 +133,15 @@ export async function broadcast(targets, { onProgress, signal } = {}) {
   const maxDelay = (config.wa?.maxDelaySec ?? 90) * 1000;
   const state = loadBroadcastState();
   const results = [];
-  let consecutiveFailures = 0;
+  // 熔断状态持久化：原来只是函数内变量，重启进程即清零绕过熔断
+  let consecutiveFailures = state.consecutiveFailures ?? 0;
   for (const target of targets) {
     if (state.sentToday >= cap) {
       results.push({ number: target.number, skipped: `daily cap ${cap} reached` });
+      break;
+    }
+    if (consecutiveFailures >= 3) {
+      results.push({ number: target.number, skipped: 'circuit breaker open (3+ consecutive failures) — 排查后明天再试' });
       break;
     }
     if (signal?.aborted) {
@@ -142,14 +153,17 @@ export async function broadcast(targets, { onProgress, signal } = {}) {
         ? await sendMedia(target.number, target.media)
         : await sendText(target.number, spinText(target.text));
       state.sentToday += 1;
-      saveBroadcastState(state);
       consecutiveFailures = 0;
+      state.consecutiveFailures = 0;
+      saveBroadcastState(state);
       results.push({ number: target.number, ok: true });
       audit('wa.broadcast.send', { number: target.number }, 'agent');
     } catch (error) {
       consecutiveFailures += 1;
+      state.consecutiveFailures = consecutiveFailures;
+      saveBroadcastState(state);
       results.push({ number: target.number, ok: false, error: String(error?.message ?? error).slice(0, 150) });
-      audit('wa.broadcast.fail', { number: target.number, error: String(error?.message ?? error).slice(0, 150) }, 'agent');
+      audit('wa.broadcast.fail', { number: target.number, consecutive: consecutiveFailures, error: String(error?.message ?? error).slice(0, 150) }, 'agent');
       if (consecutiveFailures >= 3) {
         results.push({ aborted: '3 consecutive failures — circuit breaker, stop broadcasting' });
         break;

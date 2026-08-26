@@ -191,6 +191,19 @@ export function addActivity(id, { type = 'note', note, actor = 'agent' }) {
   return activity;
 }
 
+/** 手机号尾号匹配线索：WhatsApp 收发自动关联 CRM 时间线用。 */
+export function findLeadByPhone(number) {
+  const digits = String(number ?? '').replace(/\D/g, '');
+  if (digits.length < 8) {
+    return null;
+  }
+  const tail = digits.slice(-8);
+  return listLeads({ limit: 500 }).find((lead) =>
+    [...(lead.contacts?.whatsapps ?? []), ...(lead.contacts?.phones ?? [])]
+      .some((value) => String(value).replace(/\D/g, '').endsWith(tail)),
+  ) ?? null;
+}
+
 export function listLeads({ status, tier, q, minScore, limit = 50 } = {}) {
   let leads = load().leads;
   if (status) {
@@ -287,20 +300,23 @@ export function importLeads(rows, { actor = 'user' } = {}) {
   const results = { imported: 0, merged: 0, skipped: 0, errors: [] };
   for (const row of rows) {
     try {
-      const emails = String(row.email ?? row.emails ?? '').split(/[\s;,]+/).filter((item) => item.includes('@'));
-      const whatsapps = String(row.whatsapp ?? row.whatsapps ?? row.phone ?? '').split(/[\s;,]+/).map((item) => item.replace(/\D/g, '')).filter((item) => item.length >= 8);
+      // 别名要覆盖自家导出的中文表头（邮箱/WhatsApp/电话/LinkedIn），
+      // 否则导出的 CSV 改完再导回来，联系方式全部静默丢失
+      const emails = String(row.email ?? row.emails ?? row['邮箱'] ?? '').split(/[\s;,]+/).filter((item) => item.includes('@'));
+      const whatsapps = String(row.whatsapp ?? row.whatsapps ?? row['WhatsApp'] ?? row.phone ?? row['电话'] ?? '').split(/[\s;,]+/).map((item) => item.replace(/\D/g, '')).filter((item) => item.length >= 8);
       const company = String(row.company ?? row['公司'] ?? '').trim();
-      const url = String(row.url ?? row.domain ?? row['链接'] ?? '').trim();
+      const url = String(row.url ?? row.domain ?? row.website ?? row['链接'] ?? '').trim();
       if (!company && !url && emails.length === 0 && whatsapps.length === 0) {
         results.skipped += 1;
         continue;
       }
+      const linkedin = String(row.linkedin ?? row['LinkedIn'] ?? '').trim();
       const { lead, merged } = upsertLead({
         company,
         url,
         market: String(row.market ?? row['市场'] ?? '').trim(),
         source: `import:${String(row.source ?? 'csv').slice(0, 40)}`,
-        contacts: { emails, whatsapps, phones: [], socials: {} },
+        contacts: { emails, whatsapps, phones: [], socials: linkedin ? { linkedin: [linkedin] } : {} },
         score: Number(row.score ?? row['评分'] ?? 0) || 0,
         tier: String(row.tier ?? row['分层'] ?? '').trim() || undefined,
         title: String(row.title ?? '').slice(0, 120),
