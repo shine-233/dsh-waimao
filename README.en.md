@@ -23,7 +23,7 @@ ICP profile → 3-layer Google search → contact extraction → rule filtering 
 - **Automation**: cron jobs (inbox polling, sequence execution, daily report, stale alerts, reply scan, site monitor).
 - **WhatsApp**: review desk (AI draft + human approve), media messages, rate-controlled broadcast (random delay + daily cap + circuit breaker).
 - **Quotes**: English quotation PDF, zero dependencies.
-- **49 chat tools + 4 web pages**, zero npm dependencies, Node ≥ 22.13.
+- **50 chat tools + 5 web pages**, zero npm dependencies, Node ≥ 22.13.
 
 ## Install
 

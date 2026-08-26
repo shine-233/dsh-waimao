@@ -42,6 +42,10 @@ export const DEFAULT_CONFIG = {
     apiKey: '',
     model: 'deepseek-chat',
   },
+  instantly: {
+    // Instantly.ai API key（Settings → API）：instantly_push_leads 推线索进活动用
+    apiKey: '',
+  },
   smtp: {
     host: '', // 如 smtp.gmail.com / smtp.qiye.aliyun.com
     port: 465, // 465=隐式TLS, 587=STARTTLS
@@ -74,6 +78,15 @@ export const DEFAULT_CONFIG = {
   icp: {
     product: '',
     buyers: '',
+  },
+  // 报价默认条款：quote_pdf / proforma_pdf 参数缺省时兜底，模板页可编辑。
+  quote: {
+    currency: 'USD',
+    payment: 'T/T 30% deposit, 70% against copy of B/L',
+    leadTime: '25-35 days after deposit',
+    validity: '15 days',
+    bank: { name: '', account: '', swift: '', beneficiary: '' },
+    notes: '',
   },
   imap: {
     host: '', // 如 imap.gmail.com / imap.qiye.aliyun.com
@@ -227,6 +240,10 @@ export function configSummary() {
       ready: hasKey(config.deepseek.apiKey),
       hasApiKey: hasKey(config.deepseek.apiKey),
     },
+    instantly: {
+      ready: hasKey(config.instantly?.apiKey),
+      hasApiKey: hasKey(config.instantly?.apiKey),
+    },
     smtp: {
       host: config.smtp.host,
       port: config.smtp.port,
@@ -250,6 +267,13 @@ export function configSummary() {
       product: String(config.icp?.product ?? ''),
       buyers: String(config.icp?.buyers ?? ''),
       ready: hasKey(config.icp?.product),
+    },
+    quote: {
+      currency: config.quote?.currency ?? 'USD',
+      payment: config.quote?.payment ?? '',
+      leadTime: config.quote?.leadTime ?? '',
+      validity: config.quote?.validity ?? '',
+      bank: config.quote?.bank ?? {},
     },
     cron: config.cron ?? {},
     wa: config.wa ?? {},

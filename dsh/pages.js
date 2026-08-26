@@ -205,6 +205,7 @@ const COMMON_HEAD = (title, active) =>
   `<a href="leads" class="${active === 'leads' ? 'on' : ''}">获客</a>` +
   `<a href="crm" class="${active === 'crm' ? 'on' : ''}">管线</a>` +
   `<a href="review" class="${active === 'review' ? 'on' : ''}">审核台</a>` +
+  `<a href="templates" class="${active === 'templates' ? 'on' : ''}">模板</a>` +
   `<a href="settings" class="${active === 'settings' ? 'on' : ''}">设置</a>` +
   `<span class="kbd-hint"><kbd>Ctrl</kbd>+<kbd>K</kbd></span>` +
   `</nav>` +
@@ -327,9 +328,10 @@ var CMDK_ITEMS=[
   {ic:'1',label:'获客 · 搜索',kw:'search lead 获客 搜索',href:'leads'},
   {ic:'2',label:'管线 · 看板/列表',kw:'crm pipeline 管线 看板',href:'crm'},
   {ic:'3',label:'审核台 · WhatsApp',kw:'review whatsapp 审核 客服',href:'review'},
-  {ic:'4',label:'设置 · 配置',kw:'settings config 设置 配置',href:'settings'},
-  {ic:'5',label:'线索加工',kw:'enrich 提取 评分 加工',href:'leads'},
-  {ic:'6',label:'效果统计',kw:'stats 统计 回复率',href:'crm'}
+  {ic:'4',label:'模板 · 邮件/报价',kw:'template quote 邮件 报价 模板',href:'templates'},
+  {ic:'5',label:'设置 · 配置',kw:'settings config 设置 配置',href:'settings'},
+  {ic:'6',label:'线索加工',kw:'enrich 提取 评分 加工',href:'leads'},
+  {ic:'7',label:'效果统计',kw:'stats 统计 回复率',href:'crm'}
 ];
 function initCmdk(){var box=document.getElementById('cmdk');var sel=0;
   function render(q){q=(q||'').toLowerCase();
@@ -751,6 +753,9 @@ const SETTINGS_SECTIONS = [
     ['apiKey', 'API Key', 'password'],
     ['model', '模型', 'text'],
   ] },
+  { key: 'instantly', title: 'Instantly', test: 'instantly', fields: [
+    ['apiKey', 'API Key（推线索进 Instantly 活动用）', 'password'],
+  ] },
   { key: 'track', title: '打开/点击追踪', fields: [
     ['publicBaseUrl', '公网入口 (反代到 127.0.0.1:3080)', 'text'],
     ['secret', '点击签名密钥', 'password'],
@@ -855,4 +860,78 @@ function settingsPage() {
   );
 }
 
-export { leadsPage, crmPage, reviewPage, settingsPage };
+/* ------------------------------------------------------------------ */
+/* 页面 5：模板（邮件模板库 + 报价默认条款）                             */
+/* ------------------------------------------------------------------ */
+
+function templatesPage() {
+  return (
+    COMMON_HEAD('邮件与报价模板', 'templates') +
+    `<div class="hero"><h1>模板</h1><div class="sub">邮件模板供 email_compose 直接复用 · 报价条款是 quote_pdf / proforma_pdf 的缺省值</div></div>` +
+    `<div class="panel"><div class="row" style="align-items:center">` +
+    `<h2 style="margin:0">邮件模板</h2><span class="grow"></span>` +
+    `<button id="newTpl">新建模板</button></div>` +
+    `<div id="tplList" class="mt">加载中…</div></div>` +
+    `<div class="panel"><h2>报价默认条款 <span class="hint">quote_pdf / proforma_pdf 参数没传时用这里的价值</span></h2>` +
+    `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">` +
+    `<div class="field"><label>币种</label><input id="q-currency" placeholder="USD"></div>` +
+    `<div class="field"><label>付款方式</label><input id="q-payment" placeholder="T/T 30% deposit..."></div>` +
+    `<div class="field"><label>交期</label><input id="q-leadTime" placeholder="25-35 days after deposit"></div>` +
+    `<div class="field"><label>报价有效期</label><input id="q-validity" placeholder="15 days"></div>` +
+    `<div class="field"><label>收款银行</label><input id="q-bankName"></div>` +
+    `<div class="field"><label>银行账号</label><input id="q-bankAccount"></div>` +
+    `<div class="field"><label>SWIFT</label><input id="q-bankSwift"></div>` +
+    `<div class="field"><label>收款人（Beneficiary）</label><input id="q-bankBeneficiary"></div>` +
+    `</div>` +
+    `<div class="field mt"><label>报价单备注（每份 PDF 末尾都会带）</label><textarea id="q-notes" style="min-height:60px"></textarea></div>` +
+    `<div class="flex mt"><button id="saveQuote">保存报价条款</button><span class="msg status" id="qTip"></span></div>` +
+    `</div>` +
+    `<script>` +
+    `function loadTpls(){api('api/templates').then(function(r){if(!r.ok)return;var list=r.j;` +
+    `var box=document.getElementById('tplList');` +
+    `if(!list.length){box.innerHTML='<div class="empty">还没有模板。对话里让智能体调 template_save，或点「新建模板」。</div>';return;}` +
+    `var html='';list.forEach(function(t,i){` +
+    `html+='<div class="panel" style="margin-bottom:10px;padding:12px 16px;animation:fadeUp .35s '+(i*0.05)+'s backwards">' +` +
+    `'<div class="flex"><b>'+esc(t.name)+'</b><span class="badge gray">'+esc(t.language)+'</span>' +` +
+    `(t.tags&&t.tags.length?t.tags.map(function(x){return '<span class="tag">'+esc(x)+'</span>'}).join(''):'') +` +
+    `'<span class="right"></span><button class="mini ghost" onclick="delTpl(\\''+t.id+'\\',this)">删除</button></div>' +` +
+    `'<div class="mt" style="font-weight:600;font-size:13px">'+esc(t.subject)+'</div>' +` +
+    `'<div class="muted" style="font-size:12.5px;white-space:pre-wrap;margin-top:4px">'+esc(t.bodyPreview||'')+'</div>' +` +
+    `'<div class="dim" style="font-size:11.5px;margin-top:6px">用于 '+t.used+' 次 · 更新 '+String(t.updatedAt||'').slice(0,10)+'</div></div>';});` +
+    `box.innerHTML=html;});}` +
+    `function delTpl(id,btn){confirmBox('删除这个模板？',function(){api('api/templates/delete',{method:'POST',body:JSON.stringify({id:id})})` +
+    `.then(function(r){if(!r.ok){toast(r.j.error,'err');return;}toast('已删除');loadTpls();});});}` +
+    `document.getElementById('newTpl').onclick=function(){` +
+    `modal('<h3 style="margin:0 0 14px">新建邮件模板</h3>' +` +
+    `'<div class="grid" style="grid-template-columns:2fr 1fr;gap:10px">' +` +
+    `'<div class="field"><label>模板名（唯一）</label><input id="nt-name" placeholder="hair-dryer-first-en"></div>' +` +
+    `'<div class="field"><label>语言</label><select id="nt-lang"><option value="en">en</option><option value="es">es</option><option value="pt">pt</option></select></div></div>' +` +
+    `'<div class="field mt"><label>主题</label><input id="nt-subject" placeholder="Hair dryers supply for {company}"></div>' +` +
+    `'<div class="field mt"><label>正文</label><textarea id="nt-body" style="min-height:160px"></textarea></div>',` +
+    `function(box){box.querySelector('#nt-name').focus();});` +
+    `var back=document.getElementById('modalBack');` +
+    `var footer=document.createElement('div');footer.className='flex';footer.style.cssText='justify-content:flex-end;margin-top:14px';` +
+    `footer.innerHTML='<button class="ghost" onclick="closeModal()">取消</button><button id="ntSave">保存</button>';` +
+    `back.querySelector('.box').appendChild(footer);` +
+    `footer.querySelector('#ntSave').onclick=function(){` +
+    `var name=back.querySelector('#nt-name').value.trim();var subject=back.querySelector('#nt-subject').value.trim();var body=back.querySelector('#nt-body').value.trim();` +
+    `if(!name||!subject||!body){toast('名字、主题、正文都要填','warn');return;}` +
+    `api('api/templates',{method:'POST',body:JSON.stringify({name:name,language:back.querySelector('#nt-lang').value,subject:subject,body:body})})` +
+    `.then(function(r){if(!r.ok){toast(r.j.error,'err');return;}closeModal();toast('模板已保存');loadTpls();});};};` +
+    `api('api/quote-defaults').then(function(r){if(!r.ok)return;var q=r.j;` +
+    `var map={currency:'#q-currency',payment:'#q-payment',leadTime:'#q-leadTime',validity:'#q-validity'};` +
+    `Object.keys(map).forEach(function(k){var el=document.querySelector(map[k]);if(el&&q[k])el.value=q[k];});` +
+    `var bank=q.bank||{};` +
+    `[['bankName','#q-bankName'],['bankAccount','#q-bankAccount'],['bankSwift','#q-bankSwift'],['bankBeneficiary','#q-bankBeneficiary']].forEach(function(p){var el=document.querySelector(p[1]);if(el&&bank[p[0]])el.value=bank[p[0]];});` +
+    `});` +
+    `document.getElementById('saveQuote').onclick=function(){var btn=this;btn.disabled=true;` +
+    `var g=function(id){return document.getElementById(id).value.trim();};` +
+    `api('api/config',{method:'POST',body:JSON.stringify({quote:{currency:g('q-currency'),payment:g('q-payment'),leadTime:g('q-leadTime'),validity:g('q-validity'),notes:g('q-notes'),bank:{name:g('q-bankName'),account:g('q-bankAccount'),swift:g('q-bankSwift'),beneficiary:g('q-bankBeneficiary')}}})})` +
+    `.then(function(r){btn.disabled=false;if(r.j.error){toast(r.j.error,'err');return;}toast('报价条款已保存');});};` +
+    `loadTpls();` +
+    `</script>` +
+    FOOTER
+  );
+}
+
+export { leadsPage, crmPage, reviewPage, settingsPage, templatesPage };

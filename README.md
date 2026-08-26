@@ -9,7 +9,7 @@
    → CRM管线 → 官网监控(意图信号) → 报价PDF → 结案复盘 → 效果统计
 ```
 
-## 功能总览（48 个对话工具 + 4 个网页）
+## 功能总览（50 个对话工具 + 5 个网页）
 
 | 模块 | 能力 |
 |---|---|
@@ -32,7 +32,8 @@
 | 📄 **报价** | 英文报价单 PDF（零依赖手写生成）、自动关联CRM |
 | 📈 **效果统计** | 漏斗转化、分层回复率、市场分布、回复分类、触达量、**打开率/点击率** |
 | 📬 **打开/点击追踪** | 发信自动注入像素+链接包裹（HTML替身），公网反代模式，防开放重定向 |
-| 🔥 **邮箱预热** | 预热爬坡限额（第1周5封/天，每周+5，对预热线强制）+ 主账号↔伙伴账号自动互动（互发/回复/标星）；业务发送由 smtp.dailyCap 单独保护 |
+| 🔥 **邮箱预热池** | **多收件箱互为预热池**（主账号+smtp.accounts 按天轮换配对）：每邮箱独立爬坡限额（第1周5封/天，每周+5）、自动回复/标星已读、**误入垃圾箱自动挪回 INBOX**、可选 DeepSeek 生成自然内容；业务发送由 smtp.dailyCap / accounts[].dailyCap 单独保护 |
+| 🚀 **Instantly 直连** | `instantly_push_leads` 把 CRM 高分对口线索批量推进 Instantly 活动（标准字段映射+≤500/批+dry_run 预览）、`instantly_campaign_list` 查活动/账号；官方 OpenAPI v2 对齐 |
 | 🩺 **送达率体检** | SPF/DKIM/DMARC/MX DNS检查 + 修复建议，首封开发信前必跑 |
 
 ## 安装
@@ -44,10 +45,11 @@ npx -y @deepseek-ai/dsh plugin --profile web add github:shine-233/dsh-waimao
 
 重启 `dsh web`，浏览器打开：
 
-- `http://127.0.0.1:3080/waimao/leads` —— 谷歌获客（搜索→提取→评分→入CRM 一条龙）
+- `http://127.0.0.1:3080/waimao/leads` —— 谷歌获客（搜索→提取→评分→入CRM）
 - `http://127.0.0.1:3080/waimao/crm` —— CRM 管线（AI开发信/序列/状态流转）
 - `http://127.0.0.1:3080/waimao/review` —— WhatsApp 客服审核台
-- `http://127.0.0.1:3080/waimao/settings` —— 设置（全部配置+连通性测试按钮）
+- `http://127.0.0.1:3080/waimao/templates` —— 模板（邮件模板库 + 报价默认条款）
+- `http://127.0.0.1:3080/waimao/settings` —— 设置（全部配置+连通性测试+WhatsApp扫码）
 
 ## 快速上手（对话里说人话即可）
 

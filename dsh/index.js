@@ -40,6 +40,7 @@ import * as suppressMod from './suppress.js';
 import * as trackMod from './track.js';
 import * as warmupMod from './warmup.js';
 import { deliverabilityCheck } from './deliverability.js';
+import * as instantlyMod from './instantly.js';
 import * as templatesMod from './templates.js';
 import { toVcf, toVCard } from './csv.js';
 import { calcPrice, quoteLines } from './pricing.js';
@@ -102,6 +103,7 @@ export function apply(ctx) {
   registerVideoScriptTool(ctx);
   registerIcpSetTool(ctx);
   registerDataBackupTool(ctx);
+  registerInstantlyTools(ctx);
 
   if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (scope) => {
@@ -1217,16 +1219,17 @@ function registerQuotePdfTool(ctx) {
       const kbPolicy = kbMod.contextFor('报价 政策 payment lead time', 2);
       const lead = args?.lead_id ? crmMod.getLead(String(args.lead_id)) : null;
       const quoteNo = `Q${Date.now().toString(36).toUpperCase()}`;
+      const defaults = readConfig().quote ?? {};
       const buffer = quotePdf({
         quoteNo,
         from: { company: readConfig().smtp?.fromName ?? 'Our Company', email: readConfig().smtp?.from ?? '' },
         to: { company: lead?.company ?? args?.to_company ?? 'Valued Customer', contact: '', country: lead?.market ?? '' },
         items: args?.items ?? [],
-        currency: args?.currency ?? 'USD',
-        leadTime: args?.lead_time,
-        payment: args?.payment ?? (kbPolicy ? undefined : 'T/T 30% deposit'),
-        validity: args?.validity,
-        notes: args?.notes,
+        currency: args?.currency ?? defaults.currency ?? 'USD',
+        leadTime: args?.lead_time ?? defaults.leadTime,
+        payment: args?.payment ?? (kbPolicy ? undefined : defaults.payment),
+        validity: args?.validity ?? defaults.validity,
+        notes: args?.notes ?? defaults.notes,
       });
       const file = join(EXPORT_DIR, quoteFileName(quoteNo));
       mkdirSync(EXPORT_DIR, { recursive: true });
@@ -1352,19 +1355,25 @@ function registerProformaPdfTool(ctx) {
     async execute(args) {
       const lead = args?.lead_id ? crmMod.getLead(String(args.lead_id)) : null;
       const piNo = `PI-${Date.now().toString(36).toUpperCase()}`;
+      const defaults = readConfig().quote ?? {};
       const buffer = proformaPdf({
         piNo,
         from: { company: readConfig().smtp?.fromName ?? 'Our Company', email: readConfig().smtp?.from ?? '' },
         to: { company: lead?.company ?? 'Valued Customer', country: lead?.market ?? '' },
         items: (args?.items ?? []).map((item) => ({ ...item, hsCode: item.hs_code ?? item.hsCode })),
-        currency: args?.currency ?? 'USD',
+        currency: args?.currency ?? defaults.currency ?? 'USD',
         incoterm: args?.incoterm,
-        payment: args?.payment,
-        leadTime: args?.lead_time,
+        payment: args?.payment ?? defaults.payment,
+        leadTime: args?.lead_time ?? defaults.leadTime,
         origin: args?.origin,
         destination: args?.destination,
-        bank: { name: args?.bank_name, account: args?.bank_account, swift: args?.bank_swift, beneficiary: args?.bank_beneficiary },
-        notes: args?.notes,
+        bank: {
+          name: args?.bank_name ?? defaults.bank?.name,
+          account: args?.bank_account ?? defaults.bank?.account,
+          swift: args?.bank_swift ?? defaults.bank?.swift,
+          beneficiary: args?.bank_beneficiary ?? defaults.bank?.beneficiary,
+        },
+        notes: args?.notes ?? defaults.notes,
       });
       const file = join(EXPORT_DIR, `${piNo}.pdf`);
       mkdirSync(EXPORT_DIR, { recursive: true });
@@ -1507,6 +1516,74 @@ function registerDataBackupTool(ctx) {
         bytes = statSync(file).size;
       } catch {}
       return { file, bytes };
+    },
+  });
+}
+
+function registerInstantlyTools(ctx) {
+  ctx.tools.register({
+    name: 'instantly_campaign_list',
+    description: '列出 Instantly.ai 的发信活动和账号（需 instantly.apiKey）。推送线索前先查 campaign_id。',
+    parameters: { type: 'object', properties: {} },
+    timeoutMs: 30_000,
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: 'instantly_campaign_list', kind: 'list', rawInput: args }),
+    async execute() {
+      const [campaigns, accounts] = await Promise.all([
+        instantlyMod.listCampaigns({ limit: 50 }),
+        instantlyMod.listAccounts({ limit: 50 }).catch(() => null),
+      ]);
+      return {
+        campaigns: (Array.isArray(campaigns) ? campaigns : campaigns?.campaigns ?? []).map((c) => ({ id: c.id ?? c.campaign_id, name: c.name ?? c.title, status: c.status })),
+        accounts: accounts ? (Array.isArray(accounts) ? accounts : accounts?.accounts ?? []).map((a) => ({ email: a.email, status: a.status })) : null,
+      };
+    },
+  });
+  ctx.tools.register({
+    name: 'instantly_push_leads',
+    description:
+      '把 CRM 线索批量推送到 Instantly 活动开跑：按状态/评分/对口过滤，自动映射标准字段（company_name/website，reason 进 personalization 变量），≤500/批。dry_run 默认 true 先看会推多少。',
+    parameters: {
+      type: 'object',
+      properties: {
+        campaign_id: { type: 'string', description: 'Instantly 活动 ID' },
+        status: { type: 'string', description: 'CRM 状态过滤，默认 replied 之外的高分线索' },
+        min_score: { type: 'number', description: '最低评分，默认 7' },
+        fit: { type: 'string', enum: ['yes', 'partial'], description: '只推对口的，默认 yes' },
+        limit: { type: 'number', description: '最多推多少条，默认 100' },
+        dry_run: { type: 'boolean', description: '默认 true；确认列表后传 false 真实推送' },
+      },
+      required: ['campaign_id'],
+    },
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: `instantly_push_leads → ${args?.campaign_id ?? ''}`, kind: 'update', rawInput: args }),
+    async execute(args) {
+      const minScore = Number(args?.min_score ?? 7);
+      const fit = args?.fit ?? 'yes';
+      const limit = Math.min(Number(args?.limit ?? 100), 1000);
+      const candidates = crmMod
+        .listLeads({ status: args?.status, limit: 500 })
+        .filter((lead) => lead.contacts.emails?.length)
+        .filter((lead) => (Number(lead.score ?? 0) >= minScore))
+        .filter((lead) => (fit === 'any' ? true : !lead.fit || lead.fit === fit))
+        .slice(0, limit);
+      // 同邮箱去重（跨公司重复抓取时常见）
+      const seenEmails = new Set();
+      const unique = candidates.filter((lead) => {
+        const email = String(lead.contacts.emails[0]).toLowerCase();
+        if (seenEmails.has(email)) return false;
+        seenEmails.add(email);
+        return true;
+      });
+      const payload = unique.map(instantlyMod.toInstantLead).filter((l) => l.email);
+      if (args?.dry_run !== false) {
+        auditMod.audit('instantly.push.dry_run', { campaignId: args?.campaign_id, count: payload.length }, 'agent');
+        return { dryRun: true, wouldPush: payload.length, sample: payload.slice(0, 5), note: '确认无误后带 dry_run:false 真实推送' };
+      }
+      const result = await instantlyMod.addLeads({ campaignId: args?.campaign_id, leads: payload });
+      auditMod.audit('instantly.push', { campaignId: args?.campaign_id, count: result.total }, 'agent');
+      return { ...result, pushed: result.total };
     },
   });
 }
@@ -1780,6 +1857,44 @@ function registerRoutes(scope) {
     if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
     httpMod.sendHtml(res, 200, pagesMod.settingsPage());
   });
+  route('waimao-templates-page', 'exact', '/waimao/templates', (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    httpMod.sendHtml(res, 200, pagesMod.templatesPage());
+  });
+
+  // 模板库 API（邮件模板 + 报价默认条款）
+  route('waimao-templates-api', 'exact', '/waimao/api/templates', async (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    try {
+      if (req.method === 'POST') {
+        const body = await httpMod.readBody(req);
+        const saved = templatesMod.saveTemplate({
+          name: body.name, language: body.language, subject: body.subject, body: body.body, tags: Array.isArray(body.tags) ? body.tags : [],
+        }, 'user');
+        auditMod.audit('template.save', { id: saved.id, name: saved.name }, 'user');
+        httpMod.sendJson(res, 200, { saved: true, template: saved });
+        return;
+      }
+      httpMod.sendJson(res, 200, templatesMod.listTemplates());
+    } catch (error) {
+      httpMod.sendJson(res, 400, { error: String(error?.message ?? error) });
+    }
+  });
+  route('waimao-templates-delete', 'exact', '/waimao/api/templates/delete', async (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    try {
+      const body = await httpMod.readBody(req);
+      const removed = templatesMod.removeTemplate(String(body.id ?? ''), 'user');
+      auditMod.audit('template.delete', { id: body.id }, 'user');
+      httpMod.sendJson(res, 200, { removed: true, id: removed.id });
+    } catch (error) {
+      httpMod.sendJson(res, 400, { error: String(error?.message ?? error) });
+    }
+  });
+  route('waimao-quote-defaults', 'exact', '/waimao/api/quote-defaults', (req, res) => {
+    if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
+    httpMod.sendJson(res, 200, (configMod.configSummary().quote) ?? {});
+  });
 
   route('waimao-status', 'exact', '/waimao/api/status', (req, res) => {
     if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
@@ -1849,6 +1964,14 @@ function registerRoutes(scope) {
         const config = readConfig();
         const message = await imapProbe(config.imap ?? {});
         send(true, message);
+      } else if (name === 'instantly') {
+        if (!instantlyMod.instantlyConfigured()) {
+          send(false, '未配置 instantly.apiKey');
+          return;
+        }
+        const accounts = await instantlyMod.listAccounts({ limit: 5 });
+        const list = Array.isArray(accounts) ? accounts : accounts?.accounts ?? [];
+        send(true, `Instantly 正常，工作区 ${list.length}+ 个发信账号`);
       } else {
         httpMod.sendJson(res, 404, { error: `unknown test: ${name}` });
       }
@@ -1856,7 +1979,7 @@ function registerRoutes(scope) {
       httpMod.sendJson(res, 200, { ok: false, error: String(error?.message ?? error).slice(0, 300) });
     }
   };
-  for (const engine of ['serp', 'smtp', 'evolution', 'deepseek', 'imap']) {
+  for (const engine of ['serp', 'smtp', 'evolution', 'deepseek', 'imap', 'instantly']) {
     route(`waimao-test-${engine}`, 'exact', `/waimao/api/test/${engine}`, testHandler);
   }
 

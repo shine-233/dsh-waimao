@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.2 (2026-08-26)
+
+补齐 XMT 导航栏最后一块 + GitHub 仓库治理。
+
+### 新增
+- **模板页**（第 5 个网页 `/waimao/templates`，对照 XMT 导航的「报价模板」）：
+  - 邮件模板库管理：新建/删除/查看，`email_compose` 传 `template` 参数直接复用
+  - 报价默认条款：币种/付款方式/交期/有效期/收款银行（户名·账号·SWIFT）/备注，存 `config.quote`
+  - `quote_pdf` / `proforma_pdf` 参数缺省时自动用这些条款兜底（此前每次都要重复口述付款方式）
+- **WhatsApp 扫码接入**：设置页 Evolution 区块新增「扫码接入」按钮（对接 `/instance/connect`，二维码+配对码，已连接自动识别）
+- `email_send` SOP 模式强制以已批准草稿内容发送（修复审批后可被偷换内容的漏洞），并校验草稿归属线索
+
+### 修复
+- `lead_score` 缺省只扫 new 状态，与描述"new/qualified"不符 → 补齐
+- `stats_report`：A/B 变体统计漏掉 won（回复率可能算出 >100%）；WhatsApp 触达量不计群发
+- AI 回复分类枚举补 `bounce`（配了 AI key 时退信也能自动进抑制列表）
+- 邮箱猜测模式从 11+9=20 补到 20+15=35+（兑现"35+候选"）
+- 分类规则 `'x.com'` 子串误杀 wix.com/xbox.com → 改为域边界匹配
+- Evolution `sendMedia` base64 分支改 v2 扁平格式（`mediaMessage` 是 webhook 接收载荷的形状，发信会失败）
+- GitHub 仓库描述乱码已修复（`gh repo edit`）
+
+### 工具数
+48 → **50**（并行线加了 instantly_campaign_list / instantly_push_leads）；网页 4 → **5**
+
 ## 0.7.1 (2026-08-26)
 
 全库审查后的两批修复：先修会伤客户/丢数据的严重 bug 与 IMAP 链路硬伤，再对照 GitHub 同类实战项目（OpenOutreach / gtm-mcp / warmbly）把"假功能"落地、补齐实战差距。

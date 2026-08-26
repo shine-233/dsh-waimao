@@ -22,7 +22,7 @@ const ctx = {
 };
 plugin.apply(ctx);
 
-// 49 tools + all routes
+// 50 tools + all routes
 assert.deepEqual(
   [...tools.keys()].sort(),
   [
@@ -31,6 +31,7 @@ assert.deepEqual(
     'deliverability_check',
     'email_compose', 'email_find', 'email_scan_replies', 'email_send', 'email_sequence_start', 'email_sequence_status', 'email_suppress', 'email_verify',
     'icp_set',
+    'instantly_campaign_list', 'instantly_push_leads',
     'kb_list', 'kb_search', 'kb_upsert',
     'lead_enrich', 'lead_export_csv', 'lead_score', 'lead_search',
     'market_scan',
@@ -54,10 +55,14 @@ for (const path of [
   '/waimao/leads',
   '/waimao/crm',
   '/waimao/review',
+  '/waimao/templates',
   '/waimao/settings',
   '/waimao/api/status',
   '/waimao/api/markets',
   '/waimao/api/config',
+  '/waimao/api/templates',
+  '/waimao/api/templates/delete',
+  '/waimao/api/quote-defaults',
   '/waimao/api/test/serp',
   '/waimao/api/test/imap',
   '/waimao/api/leads/search',
