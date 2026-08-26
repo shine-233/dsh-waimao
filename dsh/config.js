@@ -56,7 +56,9 @@ export const DEFAULT_CONFIG = {
     // 开发信末尾追加退订提示行（合规）。回复 STOP 的地址自动进抑制列表。
     unsubscribeFooter: true,
     // 多收件账号轮换（可选）：配了就按轮询顺序发，分散单账号发信压力。
-    // [{host,port,secure,user,pass,from,fromName}]
+    // 每个账号可设自己的 dailyCap（per-mailbox cap，实战惯例 30-40 封/邮箱/天），
+    // 打满自动切下一个账号。
+    // [{host,port,secure,user,pass,from,fromName,dailyCap}]
     accounts: [],
     // 发送时间窗（收件人当地时间 9-19 点）。序列发送在窗外自动顺延。
     sendWindow: true,

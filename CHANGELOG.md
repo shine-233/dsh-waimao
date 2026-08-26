@@ -2,7 +2,7 @@
 
 ## 0.7.1 (2026-08-26)
 
-全库审查后的两批修复：先修会伤客户/丢数据的严重 bug 与 IMAP 链路硬伤，再把"假功能"全部做成真的或改成诚实描述。
+全库审查后的两批修复：先修会伤客户/丢数据的严重 bug 与 IMAP 链路硬伤，再对照 GitHub 同类实战项目（OpenOutreach / gtm-mcp / warmbly）把"假功能"落地、补齐实战差距。
 
 ### 严重修复
 - **跟进序列 Day3/7/14 发空邮件**：`email_sequence_start`（工具+网页两处）此前只填 Day0 内容，Day3/7/14 存的是空串，cron 到期原样发出。现在启动时即用三语模板填充全部跟进步骤（`fillFollowUpSteps`），巴西走新增的葡语跟进文案
@@ -38,8 +38,19 @@
 - **SOP 幽灵提示**：outreach 阶段 hint 指向不存在的 sop_close 工具，改为如实说明再调一次 sop_next 即结案
 - 死代码清理：pricing.js 恒为 1 的除数、replies.js 两分支相同的三元表达式
 
+### 对标实战项目补齐（OpenOutreach 2.8k★ / gtm-mcp / warmbly）
+- **分类成本漏斗**：正则层（免费、确定性）先过滤退订/退信/休假等，只有模糊回复才调 AI——学 gtm-mcp 的 3-tier funnel，省 token 且结果稳定
+- **12 类回复细分**：新增 meeting(约会议)/question(提问)/wrong-person(已离职)/referral(转介同事)，AI 提示词带消歧规则（短肯定回复归 interested 等）
+- **域名级黑名单**：退信后整个公司域名拉黑（同公司其他联系人大概率也是坏地址），发送前强制拦截；`email_suppress` 新增 domain_add
+- **每邮箱独立上限（per-mailbox cap）**：smtp.accounts 每个账号可设 dailyCap，打满自动轮换到下一个（warmbly/gtm-mcp 惯例 30-40/邮箱/天）；全局 dailyCap 继续生效
+- **发送窗加工作日**：收件人当地时间 Mon-Fri 9-19 之外顺延（实战惯例），周末不发
+- **跟进邮件保持同线程**：Day3/7/14 主题改为 `Re: 首封主题`（配合已有的 In-Reply-To 头，收件箱归为同一会话）
+- **Instantly/Smartlead 标准导出**：`crm_export`/`lead_export_csv`/网页端新增 `format=importer`，输出 email/first_name/last_name/company/title/website/linkedin_url/reason 标准列免映射导入；reason 带"为什么选这条线索"（学 OpenOutreach：reason 才是差异点）
+- **DDG 标题/摘要配对修复**：中间有被过滤结果时摘要整体错位、张冠李戴并喂给下游评分；改为按文档区间配对
+- 模板文案去掉 "Just..." 家族开头（gtm-mcp 禁语清单）
+
 ### 测试
-- v3：IMAP 头块括号截断 fixture、QP 中文重组、TEXT 字面量提取
+- v3：IMAP 头块括号截断 fixture、QP 中文重组、TEXT 字面量提取、新分类类别、域名黑名单、importer 导出行
 - v6：定价断言保持兼容（total 口径不变）
 - v7：configSummary 必含字段、三语序列步骤全非空、PDF Payment 默认值/自定义值、A/B 分组稳定性
 

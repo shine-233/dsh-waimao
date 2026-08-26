@@ -9,7 +9,7 @@
 import * as auditMod from './audit.js';
 import * as configMod from './config.js';
 import * as crmMod from './crm.js';
-import { toCsv, crmRow, CRM_CSV_HEADERS } from './csv.js';
+import { toCsv, crmRow, CRM_CSV_HEADERS, importerRowFromLead, importerRowFromResult, IMPORTER_CSV_HEADERS } from './csv.js';
 import * as cronMod from './cron.js';
 import * as draftMod from './draft.js';
 import { companyDossier } from './enrich/dossier.js';
@@ -124,8 +124,12 @@ function smtpOf() {
   return config.smtp ?? {};
 }
 
-/** 多收件账号轮换：配了 smtp.accounts 就轮询选号，否则用主账号。 */
-function pickSmtpAccount() {
+/**
+ * 多收件账号轮换：配了 smtp.accounts 就轮询选号，否则用主账号。
+ * 支持账号级 dailyCap（per-mailbox cap，实战惯例 30-40/邮箱/天）：
+ * 已达自身上限的账号本轮跳过，全打满则回落主账号由上层闸门拦截。
+ */
+function pickSmtpAccount(sentByAccount = new Map()) {
   const smtp = readConfig().smtp ?? {};
   const accounts = Array.isArray(smtp.accounts) ? smtp.accounts.filter((a) => a?.host && a?.from) : [];
   if (accounts.length === 0) {
@@ -136,35 +140,64 @@ function pickSmtpAccount() {
   try {
     index = Number(readFileSync(stateFile, 'utf8').trim()) || 0;
   } catch {}
-  const account = accounts[index % accounts.length];
-  try {
-    mkdirSync(EXPORT_DIR, { recursive: true });
-    writeFileSync(stateFile, String((index + 1) % accounts.length), { mode: 0o600 });
-  } catch {}
-  return { ...smtp, ...account, accountIndex: index % accounts.length };
+  let chosen = null;
+  for (let i = 0; i < accounts.length; i += 1) {
+    const candidate = accounts[(index + i) % accounts.length];
+    const cap = Number(candidate.dailyCap ?? 0) || 0;
+    if (cap > 0 && (sentByAccount.get(candidate.from) ?? 0) >= cap) {
+      continue;
+    }
+    chosen = candidate;
+    try {
+      mkdirSync(EXPORT_DIR, { recursive: true });
+      writeFileSync(stateFile, String((index + i + 1) % accounts.length), { mode: 0o600 });
+    } catch {}
+    return { ...smtp, ...chosen, accountIndex: (index + i) % accounts.length };
+  }
+  // 所有账号都打满：返回轮换起点，交给上层账号闸门报错
+  return { ...smtp, ...accounts[index % accounts.length], accountIndex: index % accounts.length };
 }
 
 /** 发送邮件的唯一入口：日发送上限 + 抑制列表拦截 + spintax + dry_run 总闸 + 退订脚注 + 线程头 + 审计。 */
 async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId, actor = 'agent', inReplyTo, references, isFirstEmail }) {
   const config = readConfig();
-  const smtp = pickSmtpAccount();
-  if (!smtp.host || !smtp.from) {
-    throw new Error('SMTP 未配置（settings 页或 ~/.waimao/config.json 的 smtp 段）');
+  // 域名黑名单：退信/投诉过的公司域名整体拒发（同公司其他联系人大概率也是坏地址）
+  const blacklisted = suppressMod.isDomainBlacklisted(suppressMod.domainOf(to));
+  if (blacklisted) {
+    throw new Error(`收件人域名 ${blacklisted.domain} 在黑名单中（${blacklisted.reason}，${blacklisted.ts.slice(0, 10)}），拒绝发送`);
   }
-  // 容量闸门：今天真实发送已达上限就停（保护域名信誉，防进垃圾箱）
-  const dailyCap = Number(config.smtp?.dailyCap ?? 0) || 0;
-  if (dailyCap > 0 && smtp.dryRun === false) {
-    const sentToday = auditMod.countRealSends(
-      auditMod.queryAudit({ action: 'email.send', since: auditMod.startOfLocalDay(), limit: 5000 }),
-    );
-    if (sentToday >= dailyCap) {
-      throw new Error(`今日已真实发送 ${sentToday} 封，达到 smtp.dailyCap=${dailyCap} 上限。为保护域名信誉，明天再发或调高上限（新域名建议 ≤30/天）`);
-    }
-  }
-  // 合规：抑制列表拦截
   const suppressed = suppressMod.isSuppressed(to);
   if (suppressed) {
     throw new Error(`收件人 ${to} 在抑制列表中（${suppressed.reason}，${suppressed.ts.slice(0, 10)}），拒绝发送`);
+  }
+  // 今日已发审计一次取回，供全局上限与每邮箱上限共用
+  let todaysSends = [];
+  try {
+    todaysSends = auditMod.queryAudit({ action: 'email.send', since: auditMod.startOfLocalDay(), limit: 5000 });
+  } catch {}
+  const sentByAccount = new Map();
+  for (const entry of todaysSends) {
+    const account = entry.detail?.account;
+    if (account) {
+      sentByAccount.set(account, (sentByAccount.get(account) ?? 0) + 1);
+    }
+  }
+  const smtp = pickSmtpAccount(sentByAccount);
+  if (!smtp.host || !smtp.from) {
+    throw new Error('SMTP 未配置（settings 页或 ~/.waimao/config.json 的 smtp 段）');
+  }
+  // 每邮箱独立上限（per-mailbox cap）
+  const mailboxCap = Number(smtp.dailyCap ?? 0) || 0;
+  if (mailboxCap > 0 && smtp.dryRun === false && (sentByAccount.get(smtp.from) ?? 0) >= mailboxCap && config.smtp?.accounts?.length) {
+    throw new Error(`账号 ${smtp.from} 今日已达自身上限 ${mailboxCap} 封。可在 smtp.accounts 里加更多收件箱或调高该账号 dailyCap`);
+  }
+  // 容量闸门：今天真实发送已达全局上限就停（保护域名信誉，防进垃圾箱）
+  const dailyCap = Number(config.smtp?.dailyCap ?? 0) || 0;
+  if (dailyCap > 0 && smtp.dryRun === false) {
+    const sentToday = auditMod.countRealSends(todaysSends);
+    if (sentToday >= dailyCap) {
+      throw new Error(`今日已真实发送 ${sentToday} 封，达到 smtp.dailyCap=${dailyCap} 全局上限。为保护域名信誉，明天再发或调高上限（新域名建议 ≤30/天）`);
+    }
   }
   // Spintax：{a|b|c} 随机选一项，让每封信略有差异
   let finalSubject = spinText(subject);
@@ -191,7 +224,7 @@ async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId
     html = built.html;
   }
   const result = await sendMail(smtp, { from: smtp.from, fromName: smtp.fromName, to, toName, subject: finalSubject, body: finalBody, html, replyTo: smtp.replyTo, inReplyTo, references, attachments });
-  auditMod.audit('email.send', { to, subject: finalSubject, leadId, messageId: result.messageId, threaded: Boolean(inReplyTo), tracked: Boolean(tracking) }, actor);
+  auditMod.audit('email.send', { to, subject: finalSubject, leadId, account: smtp.from ?? '', messageId: result.messageId, threaded: Boolean(inReplyTo), tracked: Boolean(tracking) }, actor);
   return { dryRun: false, trackId: tracking?.id ?? null, ...result };
 }
 
@@ -263,11 +296,12 @@ function registerLeadSearchTool(ctx) {
 function registerLeadExportTool(ctx) {
   ctx.tools.register({
     name: 'lead_export_csv',
-    description: '导出一次 lead_search 结果为 CSV（UTF-8 BOM）。不传 run_id 导出最近一次。CRM 导出请用 crm_export。',
+    description: '导出一次 lead_search 结果为 CSV（UTF-8 BOM）。format=importer 输出发信工具标准列。不传 run_id 导出最近一次。CRM 导出请用 crm_export。',
     parameters: {
       type: 'object',
       properties: {
         run_id: { type: 'string' },
+        format: { type: 'string', enum: ['full', 'importer'], description: 'importer=Instantly/Smartlead 标准列' },
         file: { type: 'string', description: '可选输出路径' },
       },
     },
@@ -283,7 +317,10 @@ function registerLeadExportTool(ctx) {
       const { dirname } = await import('node:path');
       const file = args?.file || leadsMod.exportPath(run.id);
       mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, leadsMod.toLeadCsv(run), { mode: 0o600 });
+      const content = args?.format === 'importer'
+        ? toCsv(IMPORTER_CSV_HEADERS, (run.results ?? []).map(importerRowFromResult))
+        : leadsMod.toLeadCsv(run);
+      writeFileSync(file, content, { mode: 0o600 });
       return { file, total: run.total, product: run.product };
     },
   });
@@ -613,6 +650,7 @@ function registerSequenceStartTool(ctx) {
           }
           sequence.steps[0].subject = first.subject;
           sequence.steps[0].body = first.body;
+          sequence.subject0 = first.subject;
           fillFollowUpSteps(sequence, { market: lead.market, language });
           sequence.variant = variant;
           crmMod.updateLead(lead.id, { sequence }, { activityNote: `启动4步跟进序列${variant ? ` [变体${variant}]` : ''}` });
@@ -751,10 +789,11 @@ function registerCrmActivityTool(ctx) {
 function registerCrmExportTool(ctx) {
   ctx.tools.register({
     name: 'crm_export',
-    description: '导出 CRM 线索为 CSV（可按状态过滤），返回文件路径。',
+    description:
+      '导出 CRM 线索为 CSV（可按状态过滤）。format=importer 输出 Instantly/Smartlead 标准列（email/first_name/company/reason...），可直接导入发信工具；默认中文全字段表。',
     parameters: {
       type: 'object',
-      properties: { status: { type: 'string' }, file: { type: 'string' } },
+      properties: { status: { type: 'string' }, format: { type: 'string', enum: ['full', 'importer'] }, file: { type: 'string' } },
     },
     timeoutMs: 15_000,
     isConcurrencySafe: () => true,
@@ -763,7 +802,10 @@ function registerCrmExportTool(ctx) {
       const leads = crmMod.listLeads({ status: args?.status, limit: 2000 });
       const file = args?.file || join(EXPORT_DIR, `crm-${new Date().toISOString().slice(0, 10)}.csv`);
       mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, toCsv(CRM_CSV_HEADERS, leads.map(crmRow)), { mode: 0o600 });
+      const content = args?.format === 'importer'
+        ? toCsv(IMPORTER_CSV_HEADERS, leads.map(importerRowFromLead))
+        : toCsv(CRM_CSV_HEADERS, leads.map(crmRow));
+      writeFileSync(file, content, { mode: 0o600 });
       return { file, count: leads.length };
     },
   });
@@ -1601,12 +1643,13 @@ function registerEmailScanRepliesTool(ctx) {
 function registerEmailSuppressTool(ctx) {
   ctx.tools.register({
     name: 'email_suppress',
-    description: '管理邮件抑制列表（合规）：add=加入（此后拒绝向该地址发信）/ remove=移除 / list=查看。买家要求退订、投诉、地址失效时加入。',
+    description: '管理邮件抑制列表（合规）：add=加入地址 / remove=移除 / domain_add=整个域名拉黑(退信/投诉后同公司其他联系人也是坏地址) / list=查看。发送前强制拦截。',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'remove', 'list'], description: '默认list' },
+        action: { type: 'string', enum: ['add', 'remove', 'domain_add', 'list'], description: '默认list' },
         email: { type: 'string' },
+        domain: { type: 'string', description: 'action=domain_add 时必填，如 buyer.example.com' },
         reason: { type: 'string', description: 'unsubscribe/bounce/complaint/manual' },
       },
     },
@@ -1619,6 +1662,10 @@ function registerEmailSuppressTool(ctx) {
       }
       if (args?.action === 'remove') {
         return suppressMod.unsuppress(args?.email, 'user');
+      }
+      if (args?.action === 'domain_add') {
+        const domain = args?.domain ?? suppressMod.domainOf(args?.email);
+        return suppressMod.blacklistDomain(domain, args?.reason ?? 'manual', 'user');
       }
       return suppressMod.suppressStats();
     },
@@ -1978,6 +2025,7 @@ function registerRoutes(scope) {
       const first = await composeMod.composeEmail({ kind: 'first', company: lead.company || lead.domain, market: lead.market, language, me: readConfig().smtp?.fromName ?? 'Sales', product: readConfig().icp?.product || undefined, buyers: readConfig().icp?.buyers || undefined });
       sequence.steps[0].subject = first.subject;
       sequence.steps[0].body = first.body;
+      sequence.subject0 = first.subject;
       fillFollowUpSteps(sequence, { market: lead.market, language });
       crmMod.updateLead(lead.id, { sequence }, { activityNote: '网页启动4步跟进序列', actor: 'user' });
       httpMod.sendJson(res, 200, { ok: true, language, firstSubject: first.subject });
@@ -1990,8 +2038,11 @@ function registerRoutes(scope) {
     if (!httpMod.isTrustedRequest(req)) { res.writeHead(403).end(); return; }
     const url = new URL(req.url, 'http://localhost');
     const leads = crmMod.listLeads({ status: url.searchParams.get('status') ?? undefined, limit: 2000 });
+    const importer = url.searchParams.get('format') === 'importer';
     res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="crm-export.csv"` });
-    res.end(toCsv(CRM_CSV_HEADERS, leads.map(crmRow)));
+    res.end(importer
+      ? toCsv(IMPORTER_CSV_HEADERS, leads.map(importerRowFromLead))
+      : toCsv(CRM_CSV_HEADERS, leads.map(crmRow)));
   });
 
   // vCard 导出（单条 ?id= 或全部）

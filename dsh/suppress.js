@@ -5,6 +5,57 @@ import { DATA_DIR } from './config.js';
 import { audit } from './audit.js';
 
 const FILE = join(DATA_DIR, 'suppress.json');
+const DOMAIN_FILE = join(DATA_DIR, 'domain-blacklist.json');
+
+function loadDomains() {
+  try {
+    const parsed = JSON.parse(readFileSync(DOMAIN_FILE, 'utf8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDomains(list) {
+  mkdirSync(dirname(DOMAIN_FILE), { recursive: true, mode: 0o700 });
+  const tmp = `${DOMAIN_FILE}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(list, null, 1), { mode: 0o600 });
+  renameSync(tmp, DOMAIN_FILE);
+}
+
+export function domainOf(email) {
+  const raw = String(email ?? '').toLowerCase().trim().split('@')[1] ?? '';
+  return raw.replace(/^www\./, '');
+}
+
+/** 域名级黑名单：退信/投诉后整个域名拉黑（同公司其他联系人大概率也是坏地址）。 */
+export function blacklistDomain(domain, reason = 'hard-bounce', actor = 'agent') {
+  const clean = String(domain ?? '').toLowerCase().trim();
+  if (!clean.includes('.')) {
+    throw new Error(`invalid domain: ${domain}`);
+  }
+  const list = loadDomains();
+  if (list.some((item) => item.domain === clean)) {
+    return { domain: clean, already: true };
+  }
+  const entry = { domain: clean, reason, ts: new Date().toISOString() };
+  list.push(entry);
+  if (list.length > 5000) {
+    saveDomains(list.slice(-5000));
+  } else {
+    saveDomains(list);
+  }
+  audit('suppress.domain', { domain: clean, reason }, actor);
+  return entry;
+}
+
+export function isDomainBlacklisted(domain) {
+  const clean = String(domain ?? '').toLowerCase().trim();
+  if (!clean) {
+    return null;
+  }
+  return loadDomains().find((item) => item.domain === clean) ?? null;
+}
 
 export function loadSuppress() {
   try {
@@ -86,5 +137,6 @@ export function suppressStats() {
   for (const item of list) {
     byReason[item.reason] = (byReason[item.reason] ?? 0) + 1;
   }
-  return { total: list.length, byReason, recent: list.slice(-10).reverse() };
+  const domains = loadDomains();
+  return { total: list.length, byReason, recent: list.slice(-10).reverse(), domains: domains.length, domainRecent: domains.slice(-5).reverse() };
 }

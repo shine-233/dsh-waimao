@@ -133,18 +133,33 @@ import { MARKETS } from './markets.js';
 
 const STATE_FILE = join(DATA_DIR, 'cron.json');
 
-/** 收件人当地时间的小时数（按市场预设的粗时区；未知市场返回 null）。 */
+/** 收件人当地时间的小时/星期（按市场预设的粗时区；未知市场返回 null）。 */
 export function recipientLocalHour(market, now = new Date()) {
+  const parts = recipientLocalTime(market, now);
+  return parts ? parts.hour : null;
+}
+
+export function recipientLocalTime(market, now = new Date()) {
   const m = MARKETS[String(market ?? '').toLowerCase()];
   if (!m || typeof m.utc !== 'number') {
     return null;
   }
-  return (((now.getUTCHours() + m.utc) % 24) + 24) % 24;
+  const shifted = new Date(now.getTime() + m.utc * 3_600_000);
+  return { hour: shifted.getUTCHours(), dow: shifted.getUTCDay() };
 }
 
-/** 发送时间窗判断：收件人当地时间 9-19 点之外不顺延发送。 */
-export function outsideSendWindow(localHour) {
-  return localHour !== null && (localHour < 9 || localHour >= 19);
+/**
+ * 发送时间窗：收件人当地时间 9-19 点之外、或周末，都顺延。
+ * （实战惯例 Mon-Fri；dow 由调用方按收件人时区算好传入）
+ */
+export function outsideSendWindow(localHour, localDow = null) {
+  if (localHour === null || localHour === undefined) {
+    return false;
+  }
+  if (localHour < 9 || localHour >= 19) {
+    return true;
+  }
+  return localDow === 0 || localDow === 6;
 }
 
 /**
@@ -165,9 +180,12 @@ export function createSequenceJob({ sendEmail }) {
       if (!lead.sequence || lead.status === 'replied' || lead.status === 'won' || lead.status === 'lost') {
         continue;
       }
-      if (windowOn && outsideSendWindow(recipientLocalHour(lead.market))) {
-        deferred += 1;
-        continue; // 步骤保持 pending，下一轮窗口内再发
+      if (windowOn) {
+        const local = recipientLocalTime(lead.market);
+        if (outsideSendWindow(local?.hour ?? null, local?.dow ?? null)) {
+          deferred += 1;
+          continue; // 步骤保持 pending，下一轮窗口内再发
+        }
       }
       const due = dueSteps(lead.sequence);
       for (const step of due) {
@@ -177,7 +195,11 @@ export function createSequenceJob({ sendEmail }) {
           break;
         }
         try {
-          const result = await sendEmail({ lead, to: email, subject: step.subject, body: step.body, inReplyTo: lead.lastMessageId, isFirstEmail: step.day === 0 && !lead.lastMessageId });
+          // 跟进步骤保持同一线程：主题用 Re: 首封主题（In-Reply-To 已带，收件箱里归为同一会话）
+          const subject = step.index > 0 && lead.sequence?.subject0
+            ? `Re: ${String(lead.sequence.subject0).slice(0, 120)}`
+            : step.subject;
+          const result = await sendEmail({ lead, to: email, subject, body: step.body, inReplyTo: lead.lastMessageId, isFirstEmail: step.day === 0 && !lead.lastMessageId });
           step.status = 'sent';
           step.sentAt = new Date().toISOString();
           crm.updateLead(lead.id, {

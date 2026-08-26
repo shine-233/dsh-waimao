@@ -88,9 +88,9 @@ export const FOLLOW_UPS = [
     day: 3,
     subject: (p) => `Re: ${p} supply`,
     body: {
-      en: (c) => `Hi ${c.name || 'there'},\n\nJust floating this up in case it got buried. Catalog and FOB list are ready whenever you are.\n\nBest,\n${c.me}`,
-      es: (c) => `Hola ${c.name || 'que tal'},\n\nRetomo el mensaje por si quedó pendiente. El catálogo y precios FOB están listos cuando guste.\n\nSaludos,\n${c.me}`,
-      pt: (c) => `Olá ${c.name || 'tudo bem'},\n\nRetomando o contato, caso tenha ficado pendente. O catálogo e a lista de preços FOB estão prontos quando quiser.\n\nAtenciosamente,\n${c.me}`,
+      en: (c) => `Hi ${c.name || 'there'},\n\nSharing the catalog and FOB price list so you have real numbers to compare — happy to put together a quote for your typical order size.\n\nBest,\n${c.me}`,
+      es: (c) => `Hola ${c.name || 'que tal'},\n\nLe comparto el catálogo y precios FOB para que tenga números concretos — con gusto preparo una cotización para su volumen habitual.\n\nSaludos,\n${c.me}`,
+      pt: (c) => `Olá ${c.name || 'tudo bem'},\n\nCompartilhando o catálogo e a lista de preços FOB para você ter números reais — posso preparar uma cotação para o seu volume habitual.\n\nAtenciosamente,\n${c.me}`,
     },
   },
   {

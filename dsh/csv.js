@@ -75,3 +75,51 @@ export function toVCard(lead) {
 export function toVcf(leads) {
   return `${leads.map(toVCard).join('\r\n')}\r\n`;
 }
+
+/**
+ * Instantly/Smartlead 等发信工具的标准导入列（OpenOutreach 同款约定）：
+ * email/first_name/last_name 必需，其余识别为标准字段，reason 作为自定义变量
+ * 可合并进模板 —— "为什么选这条线索"比分数有用。
+ */
+export const IMPORTER_CSV_HEADERS = ['email', 'first_name', 'last_name', 'company', 'title', 'website', 'linkedin_url', 'reason'];
+
+function splitName(name) {
+  const parts = String(name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    return { first: '', last: '' };
+  }
+  if (parts.length === 1) {
+    return { first: parts[0], last: '' };
+  }
+  return { first: parts[0], last: parts[parts.length - 1] };
+}
+
+/** CRM 线索 → 发信工具导入行。 */
+export function importerRowFromLead(lead) {
+  const name = splitName(lead.contacts?.person || lead.company);
+  return {
+    email: lead.contacts?.emails?.[0] ?? '',
+    first_name: name.first,
+    last_name: name.last,
+    company: lead.company || lead.domain || '',
+    title: '',
+    website: lead.domain ? `https://${lead.domain}` : (lead.url ?? ''),
+    linkedin_url: lead.contacts?.socials?.linkedin?.[0] ?? '',
+    reason: [lead.fit ? `fit:${lead.fit}` : '', lead.advice || (lead.reasons ?? []).join('; ')].filter(Boolean).join(' | '),
+  };
+}
+
+/** 搜索结果（未加工）→ 导入行。 */
+export function importerRowFromResult(result) {
+  const name = splitName(result.title);
+  return {
+    email: result.email ?? '',
+    first_name: name.first,
+    last_name: name.last,
+    company: result.title || '',
+    title: '',
+    website: result.url ?? '',
+    linkedin_url: /linkedin\.com/i.test(result.url ?? '') ? result.url : '',
+    reason: String(result.snippet ?? '').slice(0, 200),
+  };
+}

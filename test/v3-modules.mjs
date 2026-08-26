@@ -12,6 +12,10 @@ assert.equal(classifyReply('I am out of office until Monday').category, 'ooo');
 assert.equal(classifyReply('This is an automatic reply').category, 'auto');
 assert.equal(classifyReply('We are interested, please send catalog and pricing', 'Re: hair dryers').category, 'interested');
 assert.equal(classifyReply('What is your MOQ and lead time?').category, 'interested');
+// 实战分类（对标 gtm-mcp）：会议邀约/找错人/转介同事
+assert.equal(classifyReply('Sure, let\'s schedule a call next week').category, 'meeting');
+assert.equal(classifyReply('I left the company last month, try reaching David').category, 'wrong-person');
+assert.equal(classifyReply('CC\'ing my colleague who handles purchasing').category, 'referral');
 
 /* ---------- IMAP 头解析 + 正文解码（用内部函数不可导出，走 fixture 验证 parse 逻辑） ---------- */
 // parseHeaderBlock/decodeBody 未导出，通过构造响应测试 exec 循环成本太高，
@@ -69,6 +73,17 @@ assert.equal(imap.imapDate(new Date(Date.UTC(2026, 7, 26))), '26-Aug-2026');
 /* ---------- CSV 公式注入 + vCard 转义 ---------- */
 const csvMod = await import('../dsh/csv.js');
 assert.ok(csvMod.toCsv(['公司'], [{ '公司': '=HYPERLINK("http://evil")' }]).includes("'=HYPERLINK"), '公式开头应加前缀防注入');
+// Instantly/Smartlead 标准导入列
+const impRow = csvMod.importerRowFromLead({
+  company: 'ACME Trading', domain: 'acme.example', url: '', score: 9,
+  fit: 'yes', advice: '优先触达',
+  contacts: { emails: ['buy@acme.example'], socials: { linkedin: ['https://linkedin.com/company/acme'] } },
+});
+assert.deepEqual(Object.keys(impRow), csvMod.IMPORTER_CSV_HEADERS);
+assert.equal(impRow.email, 'buy@acme.example');
+assert.equal(impRow.website, 'https://acme.example');
+assert.equal(impRow.linkedin_url, 'https://linkedin.com/company/acme');
+assert.ok(impRow.reason.includes('fit:yes'));
 const vc = csvMod.toVCard({ company: 'A,B; C\\D', market: 'mx; tier 高', contacts: {} });
 assert.ok(vc.includes('mx\\; tier 高'), `vCard NOTE 分号需转义: ${vc.split('\r\n').find((l) => l.startsWith('NOTE'))}`);
 assert.ok(vc.includes('N:A B  C D;;;;'), `vCard 需有 N 字段(公司名分隔符已被空格替代): ${vc.split('\r\n').find((l) => l.startsWith('N:'))}`);
@@ -83,6 +98,14 @@ assert.throws(() => suppress.suppress('not-an-email'), /invalid email/);
 const removed = suppress.unsuppress(testEmail, 'agent');
 assert.ok(removed.removed);
 assert.equal(suppress.isSuppressed(testEmail), null);
+
+/* ---------- 域名黑名单：退信公司整体拒发 ---------- */
+const badDomain = `banned-${Date.now()}.example.com`;
+assert.equal(suppress.isDomainBlacklisted(badDomain), null);
+suppress.blacklistDomain(badDomain, 'hard-bounce', 'agent');
+assert.ok(suppress.isDomainBlacklisted(badDomain));
+assert.equal(suppress.domainOf('buyer@' + badDomain), badDomain);
+assert.throws(() => suppress.blacklistDomain('not-a-domain'), /invalid domain/);
 
 /* ---------- 线程头 + 退订脚注 ---------- */
 const smtp = await import('../dsh/mail/smtp.js');

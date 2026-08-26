@@ -116,7 +116,13 @@ assert.equal(cron.recipientLocalHour('+999', new Date()), null, '未知市场不
 assert.equal(cron.outsideSendWindow(null), false);
 assert.equal(cron.outsideSendWindow(8), true, '9点前不顺延发送');
 assert.equal(cron.outsideSendWindow(12), false);
+assert.equal(cron.outsideSendWindow(12, 0), true, '周日不顺延发送');
+assert.equal(cron.outsideSendWindow(12, 3), false, '工作日窗口内正常发');
 assert.equal(cron.outsideSendWindow(19), true, '19点后不顺延发送');
+// 收件人当地时间换算（含星期）
+const localParts = cron.recipientLocalTime('br', new Date('2026-08-26T12:00:00Z'));
+assert.equal(localParts.hour, 9);
+assert.ok(localParts.dow >= 0 && localParts.dow <= 6);
 
 /* ---------- 时区窗 ---------- */
 const { MARKETS } = await import('../dsh/markets.js');

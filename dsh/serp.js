@@ -46,26 +46,27 @@ function decodeDdgHref(href) {
 }
 
 function parseDdgHtml(html) {
+  const anchors = [...html.matchAll(/<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)];
+  const snippets = [...html.matchAll(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/g)];
   const results = [];
-  const anchorRe =
-    /<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-  const snippetRe =
-    /class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
-  const snippets = [];
-  let snippetMatch;
-  while ((snippetMatch = snippetRe.exec(html)) !== null) {
-    snippets.push(stripHtml(snippetMatch[1]));
-  }
-  let index = 0;
-  let anchorMatch;
-  while ((anchorMatch = anchorRe.exec(html)) !== null) {
-    const url = decodeDdgHref(anchorMatch[1]);
-    const title = stripHtml(anchorMatch[2]);
+  for (const anchor of anchors) {
+    const url = decodeDdgHref(anchor[1]);
+    const title = stripHtml(anchor[2]);
     if (!title || !/^https?:\/\//i.test(url)) {
-      continue;
+      continue; // 被过滤的结果不消耗它的 snippet
     }
-    results.push({ title, url, snippet: snippets[index] ?? '' });
-    index += 1;
+    // 摘要按"文档出现顺序"配对：属于该标题之后、下一条有效标题之前的那段。
+    // 原实现按下标取全局第 N 个 snippet——中间有被过滤的结果时整体前移错位，
+    // 标题和摘要张冠李戴，错文本还会喂给下游分类/评分。
+    const end = anchor.index + anchor[0].length;
+    const nextAnchor = anchors.find((a) => {
+      const u = decodeDdgHref(a[1]);
+      const t = stripHtml(a[2]);
+      return t && /^https?:\/\//i.test(u) && a.index >= end;
+    });
+    const limit = nextAnchor ? nextAnchor.index : html.length;
+    const snippetMatch = snippets.find((s) => s.index >= end && s.index < limit);
+    results.push({ title, url, snippet: snippetMatch ? stripHtml(snippetMatch[1]) : '' });
   }
   return results;
 }

@@ -9,11 +9,14 @@ import { imapLogin, imapSelect, imapSearch, imapSearchFrom, imapFetchMessage, im
 import { audit } from '../audit.js';
 
 const RULES = [
-  { category: 'bounce', re: /undeliverable|delivery (status|failure) notification|returned mail|mailbox (not found|unavailable)|address does not exist|user unknown|退信/i },
-  { category: 'unsubscribe', re: /\bunsubscribe\b|\bopt[- ]?out\b|don'?t (want|contact)|remove me|退订|不要再联系/i },
-  { category: 'not-interested', re: /not interested|no thanks|we (are )?covered|don'?t need|no need|不感兴趣|暂无需求/i },
+  { category: 'bounce', re: /undeliverable|delivery (status|failure) notification|returned mail|mailbox (not found|unavailable|full)|address does not exist|user unknown|recipient rejected|no such user|退信/i },
+  { category: 'unsubscribe', re: /\bunsubscribe\b|\bopt[- ]?out\b|don'?t (want|email|contact|message)|remove me|take me off|no longer wish|stop emailing|退订|不要再联系/i },
+  { category: 'not-interested', re: /not interested|no thanks|we (are )?covered|don'?t need|no need|not looking|不感兴趣|暂无需求/i },
+  { category: 'wrong-person', re: /\bwrong person\b|i (have )?(left|quit) (the )?company|no longer with (the )?company|try reaching|i'?m not the right|已离职|不是我负责/i },
+  { category: 'referral', re: /cc'?ing|forward(ed|ing)? (this|to)|colleague who handles|let me (connect|introduce) you to|推荐联系/i },
   { category: 'ooo', re: /out of (the )?office|annual leave|vacation until|back (on|in) (monday|the office)|自动回复/i },
   { category: 'auto', re: /\bauto(matic)?[- ]?reply\b|mailer-daemon|postmaster@|no-?reply@/i },
+  { category: 'meeting', re: /\b(call|meeting|demo|zoom|teams|google meet)\b|\bschedule[d]?\b|calendar|available|slot|约个?(电话|会议|时间)/i },
   { category: 'interested', re: /interested|send (me |us )?(the )?(catalog|price|quotation|quote|sample)|more (info|details)|pricing|moq|lead time|报价|目录|感兴趣/i },
 ];
 
@@ -49,8 +52,8 @@ async function aiClassify(text, subject) {
           role: 'system',
           content: [
             '你是外贸销售助理，分类买家回复。只输出 JSON：',
-            '{"category":"interested|pricing|not-interested|ooo|auto|unsubscribe|bounce|other","summary":"一句话中文摘要","suggested_action":"一句中文建议"}',
-            'interested=表达兴趣/要看样品/约会议；pricing=询价要目录；not-interested=明确拒绝；ooo=休假自动回复；auto=系统自动邮件；unsubscribe=要求退订；bounce=退信/投递失败通知(地址已失效)。',
+            '{"category":"interested|meeting|pricing|question|not-interested|wrong-person|referral|ooo|auto|unsubscribe|bounce|other","summary":"一句话中文摘要","suggested_action":"一句中文建议"}',
+            'interested=表达兴趣/要看样品；meeting=明确约电话/会议/demo；pricing=询价要目录；question=决策前提问(倾向按 interested 处理)；not-interested=明确拒绝；wrong-person=已离职/不负责，建议找对的人；referral=转给同事处理；ooo=休假自动回复；auto=系统自动邮件；unsubscribe=要求退订；bounce=退信/投递失败通知(地址已失效)。短肯定回复(sure/sounds good)归 interested。',
           ].join('\n'),
         },
         { role: 'user', content: `Subject: ${subject}\n\n${String(text).slice(0, 2500)}` },
@@ -137,13 +140,21 @@ export async function scanReplies(opts = {}) {
           if (seen) {
             continue;
           }
-          const classification = opts.useAI === false
-            ? classifyReply(message.body, message.subject)
-            : (await aiClassify(message.body, message.subject).catch(() => null)) ?? classifyReply(message.body, message.subject);
+          // 分类走成本漏斗：规则层（免费、确定性：退订/退信/OOO 等）先过滤，
+          // 只有规则判为 other 的模糊回复才调 AI（学 gtm-mcp 的 3-tier funnel）
+          const ruleResult = classifyReply(message.body, message.subject);
+          const classification = ruleResult.category !== 'other' || opts.useAI === false
+            ? ruleResult
+            : (await aiClassify(message.body, message.subject).catch(() => null)) ?? ruleResult;
 
-          // 退订 → 抑制列表；退信 → 抑制列表（地址已失效，继续发伤域名信誉）
+          // 退订 → 抑制列表；退信 → 抑制 + 整个域名拉黑
           if (classification.category === 'unsubscribe' || classification.category === 'bounce') {
             suppress.suppress(leadEmail, classification.category === 'bounce' ? 'hard-bounce' : 'unsubscribe-reply', 'cron');
+            if (classification.category === 'bounce') {
+              try {
+                suppress.blacklistDomain(suppress.domainOf(leadEmail), 'hard-bounce', 'cron');
+              } catch {}
+            }
           }
 
           // 更新 CRM：状态 replied + 停序列 + 记活动
@@ -200,6 +211,9 @@ export async function scanReplies(opts = {}) {
             continue;
           }
           suppress.suppress(addr, 'hard-bounce', 'cron');
+          try {
+            suppress.blacklistDomain(suppress.domainOf(addr), 'hard-bounce', 'cron');
+          } catch {}
           crm.addActivity(hit.id, { type: 'bounce', note: `退信(${String(message.subject).slice(0, 80)})，地址已进抑制列表`, actor: 'cron' });
           const fresh = crm.getLead(hit.id);
           if (fresh?.sequence && fresh.status !== 'replied') {
