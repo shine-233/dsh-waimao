@@ -1132,23 +1132,29 @@ function noteWaActivity(leadId, note, actor = 'agent') {
   } catch {}
 }
 
-/** wa_send_media 的 media 参数：支持本地文件路径（限 exports/data 目录），自动转 base64。 */
+/** wa_send_media 的 media 参数：URL / base64 / 本地文件路径（限 exports/data 目录，自动转 base64）。
+ * 判定顺序：URL → 存在且在允许目录的文件 → 严格 base64 校验。
+ * 旧启发式要求 base64 长度 >64，短 base64（如 1x1 图）会被误判成"不存在的文件"。 */
 export async function resolveWaMedia(media, filename) {
-  const raw = String(media ?? '');
-  if (/^https?:\/\//i.test(raw) || /^[A-Za-z0-9+/=\s]+$/.test(raw.slice(0, 256)) && raw.length > 64) {
+  const raw = String(media ?? '').trim();
+  if (/^https?:\/\//i.test(raw)) {
     return { media: raw };
   }
-  // 本地路径桥：quote_pdf 返回的 file 直接可发
   const path = raw.replace(/^file:\/\//, '');
-  if (!existsSync(path)) {
-    throw new Error(`media 不是 URL/base64，也不是存在的文件: ${path}`);
-  }
   const allowed = [EXPORT_DIR, DATA_DIR].map((dir) => resolve(dir));
-  if (!allowed.some((dir) => resolve(path).startsWith(dir))) {
+  const resolved = resolve(path);
+  if (existsSync(resolved) && allowed.some((dir) => resolved.startsWith(dir))) {
+    const base64 = readFileSync(resolved).toString('base64');
+    return { media: base64, filename: filename ?? basename(resolved) };
+  }
+  const isBase64 = raw.length > 0 && raw.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(raw);
+  if (isBase64) {
+    return { media: raw };
+  }
+  if (existsSync(resolved)) {
     throw new Error(`只允许发送 exports/data 目录下的文件（quote_pdf 的产物即可）: ${path}`);
   }
-  const base64 = readFileSync(path).toString('base64');
-  return { media: base64, filename: filename ?? basename(path) };
+  throw new Error(`media 不是 URL/base64，也不是存在的文件: ${path}`);
 }
 
 function registerWaQueueTool(ctx) {
