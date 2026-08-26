@@ -86,6 +86,7 @@ export async function enrichResults(results, opts = {}) {
         });
         record.score = scored.score;
         record.tier = scored.tier;
+        record.fit = scored.fit;
         record.advice = scored.advice;
         record.reasons = scored.reasons;
         record.scoredBy = scored.scoredBy;
@@ -104,6 +105,7 @@ export async function enrichResults(results, opts = {}) {
           contacts: record.contacts,
           score: record.score,
           tier: record.tier,
+          fit: record.fit,
           reasons: record.reasons,
           advice: record.advice,
           title: item.title,

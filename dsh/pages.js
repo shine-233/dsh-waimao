@@ -202,10 +202,10 @@ const COMMON_HEAD = (title, active) =>
   `<title>${title}</title><style>${STYLE}</style></head><body><div class="wrap">` +
   `<div id="toasts"></div><div id="modalBack"></div><div id="cmdk"></div>` +
   `<nav class="tabs">` +
-  `<a href="leads" class="${active === 'leads' ? 'on' : ''}">🌐 获客</a>` +
-  `<a href="crm" class="${active === 'crm' ? 'on' : ''}">📊 管线</a>` +
-  `<a href="review" class="${active === 'review' ? 'on' : ''}">💬 审核台</a>` +
-  `<a href="settings" class="${active === 'settings' ? 'on' : ''}">⚙ 设置</a>` +
+  `<a href="leads" class="${active === 'leads' ? 'on' : ''}">获客</a>` +
+  `<a href="crm" class="${active === 'crm' ? 'on' : ''}">管线</a>` +
+  `<a href="review" class="${active === 'review' ? 'on' : ''}">审核台</a>` +
+  `<a href="settings" class="${active === 'settings' ? 'on' : ''}">设置</a>` +
   `<span class="kbd-hint"><kbd>Ctrl</kbd>+<kbd>K</kbd></span>` +
   `</nav>` +
   SHARED_JS;
@@ -324,12 +324,12 @@ function confetti(){var c=document.createElement('canvas');c.style.cssText='posi
 
 /* ---- Ctrl+K 命令面板 ---- */
 var CMDK_ITEMS=[
-  {ic:'🌐',label:'谷歌获客 · 搜索',kw:'search lead 获客 搜索',href:'leads'},
-  {ic:'📊',label:'管线 · 看板/列表',kw:'crm pipeline 管线 看板',href:'crm'},
-  {ic:'💬',label:'审核台 · WhatsApp',kw:'review whatsapp 审核 客服',href:'review'},
-  {ic:'⚙',label:'设置 · 配置',kw:'settings config 设置 配置',href:'settings'},
-  {ic:'🧪',label:'线索加工',kw:'enrich 提取 评分 加工',href:'leads'},
-  {ic:'📈',label:'效果统计',kw:'stats 统计 回复率',href:'crm'}
+  {ic:'1',label:'获客 · 搜索',kw:'search lead 获客 搜索',href:'leads'},
+  {ic:'2',label:'管线 · 看板/列表',kw:'crm pipeline 管线 看板',href:'crm'},
+  {ic:'3',label:'审核台 · WhatsApp',kw:'review whatsapp 审核 客服',href:'review'},
+  {ic:'4',label:'设置 · 配置',kw:'settings config 设置 配置',href:'settings'},
+  {ic:'5',label:'线索加工',kw:'enrich 提取 评分 加工',href:'leads'},
+  {ic:'6',label:'效果统计',kw:'stats 统计 回复率',href:'crm'}
 ];
 function initCmdk(){var box=document.getElementById('cmdk');var sel=0;
   function render(q){q=(q||'').toLowerCase();
@@ -357,8 +357,8 @@ document.addEventListener('DOMContentLoaded',initCmdk);
 function leadsPage() {
   return (
     COMMON_HEAD('谷歌获客 · 三层搜索 + 线索加工', 'leads') +
-    `<div class="hero"><h1>🌐 谷歌获客</h1><div class="sub">三层搜索 → 提取联系方式 → 过滤同行 → AI 评分 → 入库 CRM，一条龙。</div></div>` +
-    `<div class="formula" style="background:var(--card);border:1px dashed var(--border2);border-radius:12px;padding:11px 16px;color:var(--warn);font-size:13px;margin-bottom:18px">💡 课程公式：<span class="mono">"产品词" WhatsApp [+区号] site:linkedin.com -alibaba -made-in-china -globalsources -supplier -manufacturer</span> · 欧美走邮件+LinkedIn，亚非拉走 WhatsApp</div>` +
+    `<div class="hero"><h1>谷歌获客</h1><div class="sub">按产品词和市场搜买家 → 提取联系方式 → 滤掉同行平台 → 存入 CRM。</div></div>` +
+    `<div class="formula" style="background:var(--card);border:1px dashed var(--border2);border-radius:12px;padding:11px 16px;color:var(--warn);font-size:13px;margin-bottom:18px">搜索公式：<span class="mono">"产品词" WhatsApp [+区号] site:linkedin.com -alibaba -made-in-china -globalsources -supplier -manufacturer</span> · 欧美市场加 LinkedIn 层走邮件，亚非拉市场走 WhatsApp</div>` +
     `<div class="panel"><h2>搜索 <span class="hint">引擎失败自动切换（failover 链）</span></h2>` +
     `<div class="row">` +
     `<div class="field" style="flex:2 1 260px"><label>产品关键词（英文）</label><input id="product" placeholder="hair dryer" onkeydown="if(event.key==='Enter')document.getElementById('go').click()"></div>` +
@@ -366,16 +366,16 @@ function leadsPage() {
     `<div class="field"><label>搜索层级</label><select id="layers"><option value="1,2,3">三层全叠加（最精）</option><option value="1,3">基础+采购信号</option><option value="1">第1层·基础搜索</option><option value="2">第2层·LinkedIn 定位</option><option value="3">第3层·采购信号</option></select></div>` +
     `<div class="field"><label>每层条数</label><select id="perLayer"><option>5</option><option selected>10</option><option>20</option><option>30</option></select></div>` +
     `<div class="field"><label>引擎</label><select id="engine"><option value="">自动(failover)</option><option value="ddg">DuckDuckGo</option><option value="serpapi">SerpAPI(Google)</option><option value="literal">仅生成公式</option></select></div>` +
-    `<button id="go">🔍 开始搜索</button>` +
+    `<button id="go">开始搜索</button>` +
     `</div>` +
     `<div id="searchProg" style="display:none;margin-top:14px"><div class="progress"><div class="bar striped" id="progBar" style="width:8%"></div></div><div class="status muted" style="margin-top:6px" id="searchStatus"></div></div>` +
     `</div>` +
-    `<div class="panel" id="enrichPanel" style="display:none"><h2>线索加工 <span class="hint">把链接变成客户</span></h2>` +
+    `<div class="panel" id="enrichPanel" style="display:none"><h2>线索加工 <span class="hint">提取联系方式，滤掉同行，评分后入库</span></h2>` +
     `<div class="row">` +
     `<label class="muted" style="align-self:center;cursor:pointer"><input type="checkbox" id="useAI" checked> AI 评分</label>` +
     `<label class="muted" style="align-self:center;cursor:pointer"><input type="checkbox" id="fetchPages" checked> 抓取网页提取联系方式</label>` +
-    `<button id="enrich">🧪 提取 + 过滤 + 评分 + 入库</button>` +
-    `<span class="muted" style="align-self:center;font-size:12.5px">⚪排除的同行/平台不入库</span>` +
+    `<button id="enrich">提取 + 过滤 + 评分 + 入库</button>` +
+    `<span class="muted" style="align-self:center;font-size:12.5px">排除项（同行/平台）不会入库</span>` +
     `</div><div id="enrichProg" style="display:none;margin-top:14px"><div class="progress"><div class="bar" id="enrichBar" style="width:0%"></div></div><div class="status muted" style="margin-top:6px" id="enrichStatus"></div></div></div>` +
     `<div id="result"></div>` +
     `<script>` +
@@ -389,13 +389,13 @@ function leadsPage() {
     `document.getElementById('searchProg').style.display='block';` +
     `document.getElementById('result').innerHTML='';document.getElementById('enrichPanel').style.display='none';` +
     `var pct=8;var timer=setInterval(function(){pct=Math.min(pct+Math.random()*7,88);document.getElementById('progBar').style.width=pct+'%';},700);` +
-    `document.getElementById('searchStatus').textContent='逐层搜索中…（层间有礼貌间隔）';` +
+    `document.getElementById('searchStatus').textContent='逐层搜索中…';` +
     `api('api/leads/search',{method:'POST',body:JSON.stringify({product:product,market:sel.value,layers:document.getElementById('layers').value.split(',').map(Number),perLayer:Number(document.getElementById('perLayer').value),engine:document.getElementById('engine').value})})` +
-    `.then(function(res){clearInterval(timer);btn.disabled=false;btn.innerHTML='🔍 开始搜索';` +
+    `.then(function(res){clearInterval(timer);btn.disabled=false;btn.innerHTML='开始搜索';` +
     `if(!res.ok){document.getElementById('progBar').style.width='100%';document.getElementById('progBar').style.background='linear-gradient(90deg,#ef4444,#dc2626)';document.getElementById('searchStatus').innerHTML='<span class="err">'+esc(res.j.error)+'</span>';toast(res.j.error||'搜索失败','err');return;}` +
     `document.getElementById('progBar').style.width='100%';setTimeout(function(){document.getElementById('searchProg').style.display='none';document.getElementById('progBar').style.width='8%';document.getElementById('progBar').style.background=''},600);` +
     `render(res.j);toast('搜索完成：'+res.j.total+' 条结果');})` +
-    `.catch(function(e){clearInterval(timer);btn.disabled=false;btn.innerHTML='🔍 开始搜索';toastErr(e);});};` +
+    `.catch(function(e){clearInterval(timer);btn.disabled=false;btn.innerHTML='开始搜索';toastErr(e);});};` +
     `function render(run){lastRun=run;` +
     `document.getElementById('enrichPanel').style.display='block';` +
     `var chips='<div class="grid g5 stagger" style="margin-bottom:16px">' +` +
@@ -403,7 +403,7 @@ function leadsPage() {
     `'<div class="stat"><div class="num">'+run.layers.length+'</div><div class="lbl">执行层数</div></div>' +` +
     `'<div class="stat"><div class="num">'+esc(run.engine)+'</div><div class="lbl">引擎</div></div>' +` +
     `'<div class="stat"><div class="num">'+esc(run.marketLabel||run.market)+'</div><div class="lbl">市场</div></div></div>';` +
-    `var html=chips+'<div class="row mb"><button class="ghost" onclick="exportCsv(\\''+run.id+'\\')">⬇ 导出 CSV</button><button class="ghost" onclick="copyLinks()">📋 复制全部链接</button><span class="muted status" id="copyTip"></span>'+(run.engineFallbacks?'<span class="badge warn">引擎切换: '+esc(run.engineFallbacks.join(', '))+'</span>':'')+'</div>';` +
+    `var html=chips+'<div class="row mb"><button class="ghost" onclick="exportCsv(\\''+run.id+'\\')">导出 CSV</button><button class="ghost" onclick="copyLinks()">复制全部链接</button><span class="muted status" id="copyTip"></span>'+(run.engineFallbacks?'<span class="badge warn">引擎切换: '+esc(run.engineFallbacks.join(', '))+'</span>':'')+'</div>';` +
     `var byLayer={};run.results.forEach(function(it){(byLayer[it.layer]=byLayer[it.layer]||[]).push(it)});` +
     `run.layers.forEach(function(layer,li){` +
     `html+='<div class="badge" style="animation:fadeUp .4s '+(li*0.1)+'s backwards">第'+layer.id+'层 · '+esc(layer.name)+'</div>';` +
@@ -423,29 +423,32 @@ function leadsPage() {
     `if(!lastRun){toast('先跑一次搜索','warn');return;}var btn=this;btn.disabled=true;btn.innerHTML='<span class="spinner"></span>加工中';` +
     `document.getElementById('enrichProg').style.display='block';` +
     `var fake=setInterval(function(){var b=document.getElementById('enrichBar');var w=parseFloat(b.style.width)||0;if(w<85)b.style.width=(w+Math.random()*6)+'%';},900);` +
-    `document.getElementById('enrichStatus').textContent='抓页 → 提取 → 分类 → 评分 → 入库（每页有礼貌间隔）…';` +
+    `document.getElementById('enrichStatus').textContent='抓页 → 提取 → 分类 → 评分 → 入库…';` +
     `api('api/leads/enrich',{method:'POST',body:JSON.stringify({run_id:lastRun.id,useAI:document.getElementById('useAI').checked,fetchPages:document.getElementById('fetchPages').checked,limit:30})})` +
-    `.then(function(res){clearInterval(fake);btn.disabled=false;btn.innerHTML='🧪 提取 + 过滤 + 评分 + 入库';` +
+    `.then(function(res){clearInterval(fake);btn.disabled=false;btn.innerHTML='提取 + 过滤 + 评分 + 入库';` +
     `if(!res.ok){document.getElementById('enrichStatus').innerHTML='<span class="err">'+esc(res.j.error)+'</span>';toast(res.j.error,'err');return;}` +
     `document.getElementById('enrichBar').style.width='100%';` +
     `renderEnrich(res.j);toast('加工完成，'+res.j.filter(function(r){return r.leadId}).length+' 条入库','ok');})` +
-    `.catch(function(e){clearInterval(fake);btn.disabled=false;btn.innerHTML='🧪 提取 + 过滤 + 评分 + 入库';toastErr(e);});};` +
+    `.catch(function(e){clearInterval(fake);btn.disabled=false;btn.innerHTML='提取 + 过滤 + 评分 + 入库';toastErr(e);});};` +
     `function scoreCls(s){return s>=7?'score-hi':(s>=4?'score-mid':(s>=1?'score-lo':'score-no'));}` +
     `function renderEnrich(list){` +
     `var kept=list.filter(function(r){return r.keep});` +
     `document.getElementById('enrichStatus').innerHTML='<span class="ok">完成：'+kept.length+'/'+list.length+' 保留 · '+list.filter(function(r){return r.leadId&&!r.merged}).length+' 新入库 · '+list.filter(function(r){return r.merged}).length+' 合并</span>';` +
     `var html='<div class="stagger">';` +
+    `var FITLABEL={yes:'对口',partial:'沾边',no:'不对口'};` +
+    `var FITCLS={yes:'ok',partial:'warn',no:'err'};` +
     `list.forEach(function(r,i){` +
-    `var ct=[].concat(r.contacts.emails||[]).concat((r.contacts.whatsapps||[]).map(function(w){return '💬'+w})).concat(r.contacts.phones||[]).slice(0,4);` +
-    `var badge=r.keep?'<span class="badge ok">'+esc(r.kind)+'</span>':'<span class="badge gray">⚪ '+esc(r.kind)+'</span>';` +
+    `var ct=[].concat(r.contacts.emails||[]).concat((r.contacts.whatsapps||[]).map(function(w){return 'WA:'+w})).concat(r.contacts.phones||[]).slice(0,4);` +
+    `var badge=r.keep?'<span class="badge ok">'+esc(r.kind)+'</span>':'<span class="badge gray">'+esc(r.kind)+'</span>';` +
     `html+='<div class="panel" style="margin-bottom:10px;padding:13px 16px;animation-delay:'+(i*0.04)+'s">' +` +
     `'<div class="flex">'+badge+` +
     `'<span class="'+scoreCls(r.score)+'" style="font-size:16px">'+r.score+' <span style="font-size:12px">'+esc(r.tier)+'</span></span>' +` +
+    `(r.fit?'<span class="badge '+FITCLS[r.fit]+'">'+FITLABEL[r.fit]+'</span>':'') +` +
     `(r.leadId?'<span class="badge '+(r.merged?'warn':'ok')+'">'+(r.merged?'CRM合并':'已入库')+'</span>':'')+(r.error?'<span class="badge err">错误</span>':'')+'</div>' +` +
     `'<div style="margin-top:7px"><a href="'+esc(r.url)+'" target="_blank" rel="noopener" style="font-weight:600">'+esc(r.company||r.title)+'</a>' +` +
     `'<span class="muted" style="font-size:12px;margin-left:8px">'+esc(r.reason)+'</span></div>' +` +
     `'<div class="flex mt" style="font-size:12.5px">'+(ct.length?ct.map(function(c){return '<span class="tag mono">'+esc(c)+'</span>'}).join(''):'<span class="score-no">未提取到联系方式</span>')+'</div>' +` +
-    `(r.advice?'<div class="muted" style="font-size:12.5px;margin-top:6px">💡 '+esc(r.advice)+'</div>':'') +` +
+    `(r.advice?'<div class="muted" style="font-size:12.5px;margin-top:6px">'+esc(r.advice)+'</div>':'') +` +
     `'</div>';});` +
     `html+='</div>';` +
     `var box=document.createElement('div');box.innerHTML=html;document.getElementById('result').appendChild(box);}` +
@@ -464,7 +467,7 @@ function leadsPage() {
 function crmPage() {
   return (
     COMMON_HEAD('CRM 管线', 'crm') +
-    `<div class="hero"><h1>📊 管线</h1><div class="sub">新线索 → 已评估 → 已触达 → 已回复 → 已报价 → 成交/流失</div></div>` +
+    `<div class="hero"><h1>管线</h1><div class="sub">新线索 → 已评估 → 已触达 → 已回复 → 已报价 → 成交/流失</div></div>` +
     `<div id="dash" class="grid g4 mb"></div>` +
     `<div class="grid g2 mb">` +
     `<div class="panel"><h2>管线分布</h2><div class="chart-wrap" style="display:flex;gap:18px;align-items:center;flex-wrap:wrap"><canvas id="donut" width="170" height="170"></canvas><div class="legend grow" id="donutLegend"></div></div></div>` +
@@ -481,10 +484,10 @@ function crmPage() {
     `<div class="flex" style="gap:0;background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:3px">` +
     `<button class="mini" id="vKanban" style="background:var(--grad)">看板</button>` +
     `<button class="mini ghost" id="vList" style="border:none;background:transparent">列表</button></div>` +
-    `<button class="ghost mini" onclick="window.open('api/crm/export.csv','_blank')">⬇ CSV</button>` +
-    `<button class="ghost mini" onclick="window.open('api/crm/vcard','_blank')">📇 vCard</button>` +
-    `<button class="ghost mini" onclick="openCalc()">🧮 定价计算器</button>` +
-    `<label class="ghost mini clickable" style="padding:4px 11px;font-size:12px;border-radius:7px;border:1px solid var(--border);display:inline-block">📥 导入 <input type="file" accept=".csv,.json" id="importFile" style="display:none" onchange="importFile(this)"></label>` +
+    `<button class="ghost mini" onclick="window.open('api/crm/export.csv','_blank')">导出 CSV</button>` +
+    `<button class="ghost mini" onclick="window.open('api/crm/vcard','_blank')">导出 vCard</button>` +
+    `<button class="ghost mini" onclick="openCalc()">定价计算器</button>` +
+    `<label class="ghost mini clickable" style="padding:4px 11px;font-size:12px;border-radius:7px;border:1px solid var(--border);display:inline-block">导入 <input type="file" accept=".csv,.json" id="importFile" style="display:none" onchange="importFile(this)"></label>` +
     `</div>` +
     `<div id="bulkBar" class="flex mb" style="display:none;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.35);border-radius:10px;padding:9px 14px">` +
     `<span>已选 <b id="selCnt">0</b> 条</span>` +
@@ -530,10 +533,10 @@ function crmPage() {
     `return{label:e[0],value:parseInt(e[1].replyRate)||0,text:e[1].replied+'/'+e[1].contacted+' ('+e[1].replyRate+')',color:'linear-gradient(90deg,#6366f1,#8b5cf6)'};});` +
     `hbar(document.getElementById('tierBars'),tierItems.length?tierItems:[{label:'暂无触达数据',value:0,text:''}]);` +
     `hbar(document.getElementById('outreachBars'),[` +
-    `{label:'📧 邮件真实发送',value:s.outreach.emailSent,text:String(s.outreach.emailSent)},` +
-    `{label:'👁 打开(去重/天)',value:s.tracking?parseInt(s.tracking.openRate)||0:0,text:s.tracking?s.tracking.opened+'/'+s.tracking.trackedEmails+' ('+s.tracking.openRate+')':'-'},` +
-    `{label:'💬 WhatsApp 发送',value:s.outreach.waSent,text:String(s.outreach.waSent)},` +
-    `{label:'🚫 抑制列表',value:s.suppressed,text:String(s.suppressed)}]);` +
+    `{label:'邮件真实发送',value:s.outreach.emailSent,text:String(s.outreach.emailSent)},` +
+    `{label:'打开(去重/天)',value:s.tracking?parseInt(s.tracking.openRate)||0:0,text:s.tracking?s.tracking.opened+'/'+s.tracking.trackedEmails+' ('+s.tracking.openRate+')':'-'},` +
+    `{label:'WhatsApp 发送',value:s.outreach.waSent,text:String(s.outreach.waSent)},` +
+    `{label:'抑制列表',value:s.suppressed,text:String(s.suppressed)}]);` +
     `});}` +
     `function renderBoard(){var kb=document.getElementById('kanban');kb.style.display=view==='kanban'?'grid':'none';` +
     `document.getElementById('listView').style.display=view==='kanban'?'none':'block';` +
@@ -554,19 +557,19 @@ function crmPage() {
     `leads.forEach(function(l,li){var card=document.createElement('div');card.className='kcard';card.draggable=true;card.style.animationDelay=(li*0.04)+'s';` +
     `card.innerHTML='<div class="t">'+esc(l.company||l.domain)+'</div>' +` +
     `'<div class="m"><span class="'+scoreCls(l.score)+'">'+l.score+'分 '+esc(l.tier)+'</span>' +` +
-    `(l.contacts.emails&&l.contacts.emails.length?'<span>📧</span>':'') +` +
-    `(l.contacts.whatsapps&&l.contacts.whatsapps.length?'<span>💬</span>':'') +` +
-    `(l.sequence?'<span>📅</span>':'')+(l.lastReply?'<span>📩</span>':'')+'</div>';` +
+    `(l.contacts.emails&&l.contacts.emails.length?'<span title="有邮箱">邮</span>':'') +` +
+    `(l.contacts.whatsapps&&l.contacts.whatsapps.length?'<span title="有WhatsApp">WA</span>':'') +` +
+    `(l.sequence?'<span title="序列中">序</span>':'')+(l.lastReply?'<span title="已回复">复</span>':'')+'</div>';` +
     `card.onclick=function(){openDrawer(l.id)};` +
     `card.ondragstart=function(e){e.dataTransfer.setData('text/plain',l.id);card.classList.add('dragging')};` +
     `card.ondragend=function(){card.classList.remove('dragging')};` +
     `col.appendChild(card);});` +
     `kb.appendChild(col);});}` +
     `function renderList(){var box=document.getElementById('listView');` +
-    `if(allLeads.length===0){box.innerHTML='<div class="empty"><div class="big">🗂</div>暂无线索。去「获客」页跑一轮并加工入库。</div>';return;}` +
+    `if(allLeads.length===0){box.innerHTML='<div class="empty">暂无线索。去「获客」页跑一轮搜索并加工入库。</div>';return;}` +
     `var html='<table><thead><tr><th style="width:30px"><input type="checkbox" onchange="toggleAll(this)"></th><th>公司</th><th>评分</th><th>状态</th><th>联系方式</th><th>最近动作</th><th></th></tr></thead><tbody class="stagger">';` +
     `allLeads.forEach(function(l,i){` +
-    `var ct=[].concat(l.contacts.emails||[]).concat((l.contacts.whatsapps||[]).map(function(w){return '💬'+w})).slice(0,3);` +
+    `var ct=[].concat(l.contacts.emails||[]).concat((l.contacts.whatsapps||[]).map(function(w){return 'WA:'+w})).slice(0,3);` +
     `var last=l.activities&&l.activities.length?l.activities[l.activities.length-1]:null;` +
     `html+='<tr style="animation-delay:'+(i*0.03)+'s">' +` +
     `'<td><input type="checkbox" onchange="selRow(\\''+l.id+'\\',this.checked)" '+(selected[l.id]?'checked':'')+'></td>' +` +
@@ -581,7 +584,7 @@ function crmPage() {
     `document.getElementById('vList').onclick=function(){view='list';renderBoard();renderList();};` +
     `function changeStatus(id,status){api('api/crm/update',{method:'POST',body:JSON.stringify({id:id,status:status})})` +
     `.then(function(r){if(!r.ok){toast(r.j.error,'err');load();return;}` +
-    `if(status==='won'){confetti();toast('🎉 成交！','ok');}else{toast('已移至 '+SLABEL[status]);}load();});}` +
+    `if(status==='won'){confetti();toast('成交，恭喜','ok');}else{toast('已移至 '+SLABEL[status]);}load();});}` +
     `function selRow(id,checked){if(checked)selected[id]=true;else delete selected[id];updateBulkBar();}` +
     `function toggleAll(cb){allLeads.forEach(function(l){if(cb.checked)selected[l.id]=true;else delete selected[l.id]});renderList();updateBulkBar();}` +
     `function updateBulkBar(){var n=Object.keys(selected).length;document.getElementById('bulkBar').style.display=n?'flex':'none';document.getElementById('selCnt').textContent=n;}` +
@@ -603,23 +606,24 @@ function crmPage() {
     `.then(function(r){if(!r.ok){toast(r.j.error,'err');return;}toast('导入完成：新增 '+r.j.imported+'，合并 '+r.j.merged);load();});` +
     `}catch(e){toast('解析失败：'+e.message,'err');}};reader.readAsText(file,'utf-8');input.value='';}` +
     `function openDrawer(id){var l=allLeads.find(function(x){return x.id===id});if(!l)return;` +    `document.getElementById('dTitle').textContent=l.company||l.domain;` +
-    `var ct=[].concat(l.contacts.emails||[]).concat((l.contacts.whatsapps||[]).map(function(w){return '💬 +'+w})).concat(l.contacts.phones||[]);` +
+    `var ct=[].concat(l.contacts.emails||[]).concat((l.contacts.whatsapps||[]).map(function(w){return 'WA: +'+w})).concat(l.contacts.phones||[]);` +
     `var acts=(l.activities||[]).slice(-8).reverse();` +
     `document.getElementById('dBody').innerHTML=` +
     `'<div class="flex mb"><span class="badge" style="border-color:'+SCOLOR[l.status]+'55;color:'+SCOLOR[l.status]+'">'+SLABEL[l.status]+'</span>' +` +
     `'<span class="'+scoreCls(l.score)+'" style="font-size:18px">'+l.score+'分</span><span class="badge gray">'+esc(l.tier)+'</span>' +` +
-    `(l.sequence?'<span class="badge">📅 序列中</span>':'')+'</div>' +` +
-    `(l.advice?'<div class="panel" style="padding:12px 14px;margin-bottom:12px">💡 '+esc(l.advice)+'</div>':'') +` +
+    `(l.fit?'<span class="badge '+(l.fit==='yes'?'ok':(l.fit==='no'?'err':'warn'))+'">'+(l.fit==='yes'?'对口':(l.fit==='no'?'不对口':'沾边'))+'</span>':'') +` +
+    `(l.sequence?'<span class="badge">序列中</span>':'')+'</div>' +` +
+    `(l.advice?'<div class="panel" style="padding:12px 14px;margin-bottom:12px">'+esc(l.advice)+'</div>':'') +` +
     `'<div class="mb"><div class="muted" style="font-size:12px;margin-bottom:5px">联系方式</div>' +` +
     `(ct.length?ct.map(function(c){return '<div class="mono" style="padding:3px 0">'+esc(c)+'</div>'}).join(''):'<span class="dim">无</span>')+'</div>' +` +
-    `(l.lastReply?'<div class="panel" style="padding:12px 14px;margin-bottom:12px"><b class="ok">📩 最近回复 ['+esc(l.lastReply.category)+']</b><div class="muted" style="font-size:12.5px;margin-top:4px">'+esc(l.lastReply.summary)+'</div></div>':'') +` +
+    `(l.lastReply?'<div class="panel" style="padding:12px 14px;margin-bottom:12px"><b class="ok">最近回复 ['+esc(l.lastReply.category)+']</b><div class="muted" style="font-size:12.5px;margin-top:4px">'+esc(l.lastReply.summary)+'</div></div>':'') +` +
     `'<div class="muted" style="font-size:12px;margin-bottom:5px">动作时间线</div>' +` +
     `acts.map(function(a){return '<div style="padding:7px 0;border-bottom:1px solid rgba(39,39,42,.6);font-size:12.5px"><span class="dim mono">'+a.ts.slice(5,16)+'</span> '+esc(a.note)+'</div>'}).join('') || '<span class="dim">无</span>';` +
     `document.getElementById('drawer').classList.add('show');}` +
     `function closeDrawer(){document.getElementById('drawer').classList.remove('show');}` +
     `/* ---- 定价计算器（实时联动） ---- */` +
     `function openCalc(){` +
-    `modal('<h3 style="margin:0 0 14px">🧮 定价计算器 <span class="dim" style="font-size:12px;font-weight:400">Incoterms 2020 叠加</span></h3>' +` +
+    `modal('<h3 style="margin:0 0 14px">定价计算器 <span class="dim" style="font-size:12px;font-weight:400">Incoterms 2020 叠加</span></h3>' +` +
     `'<div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">' +` +
     `['exw|出厂成本','inland|国内运费','port|港口/报关费','ocean|海运费','insurance_rate|保险率%','dest|目的港清关费','dest_freight|目的地运费','margin|利润率%'].map(function(f){` +
     `var p=f.split('|');return '<div class="field"><label>'+p[1]+'</label><input type="number" id="pc-'+p[0]+'" value="0" oninput="calcLive()"></div>'}).join('') +` +
@@ -649,7 +653,7 @@ function crmPage() {
 function reviewPage() {
   return (
     COMMON_HEAD('客服审核台', 'review') +
-    `<div class="hero"><h1>💬 审核台</h1><div class="sub">买家消息先进队列 · AI 起草 · 人工确认才发送</div></div>` +
+    `<div class="hero"><h1>审核台</h1><div class="sub">买家消息先进队列 · AI 起草 · 人工确认才发送</div></div>` +
     `<div class="panel"><div class="row" style="align-items:center">` +
     `<span id="pills" class="muted">加载中…</span><span class="grow"></span>` +
     `<button class="ghost" id="refresh">↻ 刷新</button></div></div>` +
@@ -664,7 +668,7 @@ function reviewPage() {
     `'<span class="pill '+(s.smtp.ready?(s.smtp.dryRun?'off':'on'):'off')+'">SMTP '+(s.smtp.ready?(s.smtp.dryRun?'dry-run':'可发送'):'未配置')+'</span>';});}` +
     `function loadQueue(){api('api/review/queue?limit=50').then(function(r){if(!r.ok)return;var list=r.j;` +
     `var box=document.getElementById('queue');` +
-    `if(!list.length){box.innerHTML='<div class="panel"><div class="empty"><div class="big">💬</div>队列为空。<br><span style="font-size:12.5px">Evolution webhook → /waimao/webhook/evolution?token=…，或让智能体调用 wa_sync 拉取。</span></div></div>';return;}` +
+    `if(!list.length){box.innerHTML='<div class="panel"><div class="empty">队列为空。<br><span style="font-size:12.5px">Evolution webhook → /waimao/webhook/evolution?token=…，或让智能体调用 wa_sync 拉取。</span></div></div>';return;}` +
     `var html='';` +
     `list.forEach(function(m,i){` +
     `html+='<div class="panel" style="animation:fadeUp .4s '+(i*0.06)+'s backwards" id="m-'+esc(m.id)+'">' +` +
@@ -673,8 +677,8 @@ function reviewPage() {
     `'<div class="chat"><div class="bubble them">'+esc(m.text)+'<div class="bmeta">'+fmtTs(m.ts)+'</div></div>' +` +
     `'<div id="draftWrap-'+esc(m.id)+'"></div></div>' +` +
     `'<div class="actions">' +` +
-    `'<button class="mini" onclick="draft(\\''+esc(m.id)+'\\',this)">✨ AI 草稿</button>' +` +
-    `'<button class="mini" onclick="send(\\''+esc(m.id)+'\\',this)">✅ 审核并发送</button>' +` +
+    `'<button class="mini" onclick="draft(\\''+esc(m.id)+'\\',this)">AI 草稿</button>' +` +
+    `'<button class="mini" onclick="send(\\''+esc(m.id)+'\\',this)">审核并发送</button>' +` +
     `'<button class="mini ghost" onclick="ignore(\\''+esc(m.id)+'\\',this)">忽略</button></div>' +` +
     `'<div class="msg status mt" id="tip-'+esc(m.id)+'"></div></div>';});` +
     `box.innerHTML=html;});}` +
@@ -709,13 +713,17 @@ function reviewPage() {
 /* ------------------------------------------------------------------ */
 
 const SETTINGS_SECTIONS = [
-  { key: 'serp', title: '🌐 SERP 搜索', test: 'serp', fields: [
+  { key: 'icp', title: 'ICP 画像', fields: [
+    ['product', '我方产品（一句英文，如 professional hair dryers 1800-2400W）', 'text'],
+    ['buyers', '对口买家类型（英文，如 wholesalers, beauty supply distributors）', 'text'],
+  ] },
+  { key: 'serp', title: 'SERP 搜索', test: 'serp', fields: [
     ['engine', '首选引擎', 'select', [['ddg', 'DuckDuckGo(免key)'], ['serpapi', 'SerpAPI(Google)']]],
     ['serpapiKey', 'SerpAPI Key', 'password'],
     ['perLayer', '每层条数', 'number'],
     ['proxy', '代理 (http://127.0.0.1:7890)', 'text'],
   ] },
-  { key: 'smtp', title: '✉️ SMTP 发信', test: 'smtp', fields: [
+  { key: 'smtp', title: 'SMTP 发信', test: 'smtp', fields: [
     ['host', '服务器', 'text'],
     ['port', '端口', 'number'],
     ['user', '账号', 'text'],
@@ -723,33 +731,35 @@ const SETTINGS_SECTIONS = [
     ['from', '发件人', 'text'],
     ['fromName', '发件人名', 'text'],
     ['dryRun', 'dry-run 总闸', 'select', [['true', 'true（安全，只预览）'], ['false', 'false（真实发送）']]],
+    ['dailyCap', '每日真实发送上限（新域名建议 20-30，0=不限制）', 'number'],
+    ['plainText', '纯文本模式（不注入追踪，投递率更好）', 'select', [['false', '关'], ['true', '开']]],
   ] },
-  { key: 'imap', title: '📬 IMAP 回复检测', test: 'imap', fields: [
+  { key: 'imap', title: 'IMAP 回复检测', test: 'imap', fields: [
     ['host', '服务器', 'text'],
     ['port', '端口', 'number'],
     ['user', '账号', 'text'],
     ['pass', '密码/授权码', 'password'],
     ['mailbox', '邮箱夹', 'text'],
   ] },
-  { key: 'evolution', title: '💬 Evolution API', test: 'evolution', fields: [
+  { key: 'evolution', title: 'Evolution API', test: 'evolution', fields: [
     ['baseURL', 'Base URL', 'text'],
     ['apiKey', 'API Key', 'password'],
     ['instance', '实例名', 'text'],
   ] },
-  { key: 'deepseek', title: '🤖 DeepSeek', test: 'deepseek', fields: [
+  { key: 'deepseek', title: 'DeepSeek', test: 'deepseek', fields: [
     ['baseURL', 'Base URL', 'text'],
     ['apiKey', 'API Key', 'password'],
     ['model', '模型', 'text'],
   ] },
-  { key: 'track', title: '📈 追踪', fields: [
+  { key: 'track', title: '打开/点击追踪', fields: [
     ['publicBaseUrl', '公网入口 (反代到 127.0.0.1:3080)', 'text'],
     ['secret', '点击签名密钥', 'password'],
   ] },
-  { key: 'warmup', title: '🔥 预热', fields: [
+  { key: 'warmup', title: '邮箱预热', fields: [
     ['enabled', '启用', 'select', [['false', '关'], ['true', '开']]],
     ['maxPerDay', '爬坡封顶(封/天)', 'number'],
   ] },
-  { key: 'cron', title: '⏰ 定时任务', fields: [
+  { key: 'cron', title: '定时任务', fields: [
     ['enabled', '总开关', 'select', [['true', '开'], ['false', '关']]],
     ['waSyncEveryMin', 'WA轮询(分钟)', 'number'],
     ['sequenceCheckEveryMin', '序列检查(分钟)', 'number'],
@@ -758,7 +768,7 @@ const SETTINGS_SECTIONS = [
     ['dailyReportAt', '日报时间(HH:mm)', 'text'],
     ['staleDays', '停跟进天数', 'number'],
   ] },
-  { key: 'wa', title: '💬 群发频控', fields: [
+  { key: 'wa', title: '群发频控', fields: [
     ['dailyBroadcastCap', '每日上限', 'number'],
     ['minDelaySec', '最小间隔(秒)', 'number'],
     ['maxDelaySec', '最大间隔(秒)', 'number'],
@@ -785,8 +795,8 @@ function settingsPage() {
   }).join('');
   return (
     COMMON_HEAD('设置', 'settings') +
-    `<div class="hero"><h1>⚙ 设置</h1><div class="sub">~/.waimao/config.json · 密钥只写不读 · 每个区块可独立测试连通</div></div>` +
-    `<div class="flex mb">${tabs}<span class="grow"></span><button id="save">💾 保存全部</button></div>` +
+    `<div class="hero"><h1>设置</h1><div class="sub">配置写入 ~/.waimao/config.json · 密钥只写不读 · 每个区块可单独测试连通</div></div>` +
+    `<div class="flex mb">${tabs}<span class="grow"></span><button id="save">保存全部</button></div>` +
     panels +
     `<script>` +
     `var SECRET_KEYS=['serpapiKey','apiKey','pass','secret'];` +
@@ -805,12 +815,12 @@ function settingsPage() {
     `$$('[data-section]').forEach(function(el){` +
     `var sec=el.getAttribute('data-section'),key=el.getAttribute('data-key');` +
     `patch[sec]=patch[sec]||{};var v=el.value;` +
-    `if(el.type==='number'||['perLayer','port','staleDays','dailyBroadcastCap','minDelaySec','maxDelaySec','waSyncEveryMin','sequenceCheckEveryMin','replyScanEveryMin','monitorEveryHour','maxPerDay'].indexOf(key)>=0){v=Number(v);}` +
-    `if(['dryRun','enabled'].indexOf(key)>=0){v=v==='true';}` +
+    `if(el.type==='number'||['perLayer','port','staleDays','dailyBroadcastCap','minDelaySec','maxDelaySec','waSyncEveryMin','sequenceCheckEveryMin','replyScanEveryMin','monitorEveryHour','maxPerDay','dailyCap'].indexOf(key)>=0){v=Number(v);}` +
+    `if(['dryRun','enabled','plainText'].indexOf(key)>=0){v=v==='true';}` +
     `if(SECRET_KEYS.indexOf(key)>=0&&!v){return;}` +
     `patch[sec][key]=v;});` +
     `api('api/config',{method:'POST',body:JSON.stringify(patch)})` +
-    `.then(function(r){btn.disabled=false;btn.innerHTML='💾 保存全部';` +
+    `.then(function(r){btn.disabled=false;btn.innerHTML='保存全部';` +
     `if(r.j.error){toast(r.j.error,'err');}else{toast('已保存 ✓');}});};` +
     `function testConn(name,btn){btn.disabled=true;btn.innerHTML='<span class="spinner"></span>测试中';` +
     `var tip=document.getElementById('t-'+name);tip.textContent='';` +

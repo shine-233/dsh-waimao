@@ -2,6 +2,21 @@
 // 短视频脚本，带分镜时间轴。无 key 时回退到固定结构模板。
 import { readConfig } from './config.js';
 
+/**
+ * Spintax：把 {a|b|c} 随机替换成其中一项。用于群发时让每封邮件略有差异，
+ * 降低被判定为群发模板的概率。不含 | 的花括号原样保留（不误伤 JSON/占位符）。
+ * 纯函数，导出供测试。
+ */
+export function spinText(text, rand = Math.random) {
+  return String(text ?? '').replace(/\{([^{}]*)\}/g, (whole, inner) => {
+    if (!inner.includes('|')) {
+      return whole;
+    }
+    const options = inner.split('|');
+    return options[Math.floor(rand() * options.length)] ?? options[0];
+  });
+}
+
 const FALLBACK = ({ product, audience, seconds }) => ({
   duration: `${seconds}s`,
   hook: { t: '0-3s', text: `Stop scrolling if you need ${product}!` },

@@ -60,6 +60,18 @@ export const DEFAULT_CONFIG = {
     accounts: [],
     // 发送时间窗（收件人当地时间 9-19 点）。序列发送在窗外自动顺延。
     sendWindow: true,
+    // 每日真实发送上限（所有账号合计，按审计日志统计）。0 = 不限制。
+    // 新域名建议 20-30/天起步，稳定两周后再逐步上调。
+    dailyCap: 300,
+    // 纯文本模式：true 时不生成 HTML 替身（也不注入打开/点击追踪）。
+    // 纯文本投递率更好，Cold outreach 的常见做法。
+    plainText: false,
+  },
+  // ICP 画像（理想客户）：评分和写开发信都会用到。
+  // product 用一句英文说清你卖什么；buyers 描述什么样的买家算对口。
+  icp: {
+    product: '',
+    buyers: '',
   },
   imap: {
     host: '', // 如 imap.gmail.com / imap.qiye.aliyun.com
@@ -217,6 +229,13 @@ export function configSummary() {
       from: config.smtp.from,
       ready: hasKey(config.smtp.host) && hasKey(config.smtp.from),
       dryRun: config.smtp.dryRun !== false,
+      dailyCap: Number(config.smtp.dailyCap ?? 0) || 0,
+      plainText: config.smtp.plainText === true,
+    },
+    icp: {
+      product: String(config.icp?.product ?? ''),
+      buyers: String(config.icp?.buyers ?? ''),
+      ready: hasKey(config.icp?.product),
     },
     cron: config.cron ?? {},
     wa: config.wa ?? {},

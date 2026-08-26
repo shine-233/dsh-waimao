@@ -1,11 +1,10 @@
 {
   "name": "dsh-waimao",
-  "version": "0.6.0",
-  "description": "外贸获客全家桶 plugin for DeepSeek Harness (dsh): search → enrichment → scoring → email (tracking/warmup/threading) → reply detection → CRM kanban → SOP gates → monitoring → quotes. 40 tools, 4 animated pages, zero deps.",
-  "description": "外贸获客全家桶 plugin for DeepSeek Harness (dsh): 3-layer Google lead search → contact extraction → rule+AI scoring → email finder/verifier → bilingual cold emails (dry-run, threading, open/click tracking) → IMAP reply scan with AI classification → follow-up sequences → CRM pipeline → SOP stage machine with human approval gates → knowledge base → website monitoring → inbox warmup → deliverability checks → cron jobs → WhatsApp broadcast/media/quotes. 零依赖。",
+  "version": "0.7.0",
+  "description": "外贸获客插件 for DeepSeek Harness (dsh): 3-layer Google lead search → contact extraction → ICP-aware rule+AI scoring → email finder/verifier → cold emails (spintax, daily cap, dry-run, threading, open/click tracking) → IMAP reply scan with AI classification → follow-up sequences → CRM pipeline → SOP stage machine with human approval gates → knowledge base → website monitoring → inbox warmup → deliverability checks → cron jobs → WhatsApp broadcast/media/quotes. 零依赖。",
   "type": "module",
   "scripts": {
-    "test": "node test/smoke.mjs && node test/ddg-fixture.mjs && node test/v2-modules.mjs && node test/v3-modules.mjs && node test/v4-modules.mjs && node test/host-sim.mjs"
+    "test": "node test/smoke.mjs && node test/ddg-fixture.mjs && node test/v2-modules.mjs && node test/v3-modules.mjs && node test/v4-modules.mjs && node test/v6-modules.mjs && node test/v7-modules.mjs && node test/host-sim.mjs"
   },
   "exports": {
     ".": "./dsh/index.js",

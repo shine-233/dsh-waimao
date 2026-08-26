@@ -22,7 +22,7 @@ const ctx = {
 };
 plugin.apply(ctx);
 
-// 48 tools + all routes
+// 49 tools + all routes
 assert.deepEqual(
   [...tools.keys()].sort(),
   [
@@ -30,6 +30,7 @@ assert.deepEqual(
     'data_backup',
     'deliverability_check',
     'email_compose', 'email_find', 'email_scan_replies', 'email_send', 'email_sequence_start', 'email_sequence_status', 'email_suppress', 'email_verify',
+    'icp_set',
     'kb_list', 'kb_search', 'kb_upsert',
     'lead_enrich', 'lead_export_csv', 'lead_score', 'lead_search',
     'market_scan',
@@ -45,6 +46,9 @@ assert.deepEqual(
     'warmup_status',
   ].sort(),
 );
+// icp_set 落库
+const icpSet = tools.get('icp_set');
+assert.ok(icpSet.parameters.required.includes('product'));
 for (const path of [
   '/waimao',
   '/waimao/leads',

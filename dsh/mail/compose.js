@@ -9,7 +9,7 @@ const SYSTEM = {
   es: 'Eres un vendedor internacional de élite. Escribe un email corto (<=120 palabras), texto plano, sin HTML, sin marcadores sin rellenar. Cierra con una pregunta clara. Output JSON: {"subject":"...","body":"..."}',
 };
 
-async function aiWrite({ language, product, market, company, name, knowledge, me, features, kind, step }) {
+async function aiWrite({ language, product, market, company, name, knowledge, me, features, buyers, kind, step }) {
   const config = readConfig();
   if (!config.deepseek.apiKey) {
     return null;
@@ -29,6 +29,7 @@ async function aiWrite({ language, product, market, company, name, knowledge, me
           content: [
             `From rep: ${me}`,
             `Our product: ${product}`,
+            buyers ? `Who we are looking for: ${buyers}` : '',
             `Our strengths: ${features ?? 'factory direct, stable quality, fast lead time'}`,
             `Target company: ${company ?? ''} contact: ${name ?? 'unknown'}`,
             `Target market: ${market ?? ''}`,
@@ -55,7 +56,7 @@ async function aiWrite({ language, product, market, company, name, knowledge, me
 
 /**
  * 撰写开发信/跟进。
- * opts: {kind:'first'|'followup', step?, name, company, product, market, me, features, language?, knowledge?, useAI?}
+ * opts: {kind:'first'|'followup', step?, name, company, product, buyers?, market, me, features, language?, knowledge?, useAI?}
  */
 export async function composeEmail(opts) {
   const language = opts.language ?? languageFor(opts.market);

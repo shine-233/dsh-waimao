@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.0 (2026-08-26)
+
+对照 GitHub 上跑通同类项目的经验（OpenOutreach / gtm-mcp / warmbly / seqd），补上四个真正影响回复率的功能；界面文案整体去掉 AI 腔。
+
+### 新功能
+- `icp_set` **ICP 画像**：一句话设置"我卖什么 + 找什么买家"。`lead_enrich`/`lead_score` 评分时判断线索是否对口（fit: 对口/沾边/不对口，附理由，学 OpenOutreach 的 reason-per-lead），`email_compose` 写信也知道卖什么——修复了之前产品词传空、模板兜底会写出 "We supply to importers..." 残句的问题
+- **Spintax**：邮件主题/正文支持 `{a|b|c}` 随机变体，发送时选一项，群发时每封略有差异（学 seqd/warmbly）；不含 `|` 的花括号不受影响
+- **smtp.dailyCap 日发送上限**：按审计日志统计当日真实发送量，达到上限拒绝发送并提示（学 gtm-mcp 的容量闸门）。新域名建议 20-30/天，保护域名信誉
+- **smtp.plainText 纯文本模式**：开了就不注入 HTML 替身和打开/点击追踪（学 gtm-mcp 的实践：纯文本投递率更好）
+
+### 界面文案
+- 去掉满屏 emoji（导航/按钮/标题只留必要符号），"一条龙""课程公式""把链接变成客户"这类话全部改成平实说法
+- 获客页加工结果显示"对口/沾边/不对口"徽章；线索详情抽屉同步显示
+
+### 其他
+- 设置页新增 ICP 画像区块 + 日上限 + 纯文本开关；`package.json` 修复重复的 description 键；v6 测试补进 npm test
+- 工具数 48 → **49**（+icp_set）；新增 `test/v7-modules.mjs`
+
 ## 0.6.0 (2026-08-25)
 
 对照 XMT 截图导航栏补齐最后一批外贸特化工具 + 发信基建增强。

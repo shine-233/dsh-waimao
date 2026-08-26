@@ -53,3 +53,20 @@ export function queryAudit({ limit = 100, action, actor, since } = {}) {
   }
   return out;
 }
+
+/** 本地时区某一天的 00:00 的 ISO 时间戳。 */
+export function startOfLocalDay(date = new Date()) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+/**
+ * 统计今天真实发送的邮件数（不含 dry-run）。纯函数，供日发送上限判断。
+ * entries 传 queryAudit({action:'email.send', since: startOfLocalDay()})；
+ * 传混合列表也安全：只认 action=email.send 且 detail.dryRun!==true。
+ */
+export function countRealSends(entries) {
+  return (Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry?.action === 'email.send' && entry?.detail?.dryRun !== true).length;
+}

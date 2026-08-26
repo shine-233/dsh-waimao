@@ -55,14 +55,15 @@ export function tierOf(score) {
   return { tier: '排除', emoji: '⚪' };
 }
 
-async function aiScore({ product, market, text, knowledge }) {
+async function aiScore({ product, market, text, knowledge, icp }) {
   const config = readConfig();
   if (!config.deepseek.apiKey) {
     return null;
   }
   const system = [
     '你是外贸客户意向评估专家。根据线索文本判断其作为买家（进口商/批发商/经销商/零售商）的采购意向强度。',
-    '只输出 JSON：{"score":0-6的整数,"reasons":["原因"],"advice":"一句开发建议(中文)"}。不要输出其他内容。',
+    icp ? `我方 ICP：${icp}。判断该线索是否属于这个范围，给出 fit 字段：yes=对口 / partial=沾边 / no=不对口。` : '',
+    '只输出 JSON：{"score":0-6的整数,"fit":"yes|partial|no","reasons":["原因"],"advice":"一句开发建议(中文)"}。reasons 里第一条用中文说明为什么合适/不合适我方产品。不要输出其他内容。',
     knowledge ? `企业知识参考：${knowledge}` : '',
   ].filter(Boolean).join('\n');
   const response = await fetch(`${config.deepseek.baseURL.replace(/\/+$/, '')}/chat/completions`, {
@@ -87,8 +88,10 @@ async function aiScore({ product, market, text, knowledge }) {
   const content = payload?.choices?.[0]?.message?.content ?? '{}';
   const parsed = JSON.parse(content.replace(/^```json\s*|```\s*$/g, ''));
   const score = Math.max(0, Math.min(6, Number(parsed.score) || 0));
+  const fit = ['yes', 'partial', 'no'].includes(parsed.fit) ? parsed.fit : null;
   return {
     aiScore: score,
+    fit,
     aiReasons: Array.isArray(parsed.reasons) ? parsed.reasons.slice(0, 5) : [],
     advice: String(parsed.advice ?? '').slice(0, 200),
   };
@@ -96,18 +99,24 @@ async function aiScore({ product, market, text, knowledge }) {
 
 /**
  * 综合评分。opts: {product, market, item:{title,snippet,signalsText,html?}, useAI, knowledge}
- * 返回 {score(0-12), tier, emoji, reasons[], advice}
+ * product/market 缺省时回落到 config.icp。
+ * 返回 {score(0-12), tier, emoji, fit?, reasons[], advice}
  */
 export async function scoreLead(opts) {
+  const config = readConfig();
   const base = ruleScore(opts.item ?? {});
+  const product = opts.product || config.icp?.product || '';
+  const icpBuyers = config.icp?.buyers || '';
+  const icpText = [product, icpBuyers].filter(Boolean).join('；买家类型：');
   let ai = null;
   if (opts.useAI !== false) {
     try {
       ai = await aiScore({
-        product: opts.product,
+        product,
         market: opts.market,
         text: `${opts.item?.title ?? ''} ${opts.item?.snippet ?? ''} ${opts.item?.signalsText ?? ''}`,
         knowledge: opts.knowledge,
+        icp: icpText || null,
       });
     } catch {
       ai = null; // 静默回退规则分
@@ -115,12 +124,14 @@ export async function scoreLead(opts) {
   }
   const score = Math.min(12, base.ruleScore + (ai?.aiScore ?? 0));
   const { tier, emoji } = tierOf(score);
+  const advice = ai?.advice ?? (tier === '极高' || tier === '高' ? '建议优先 WhatsApp/邮件触达，附产品图与FOB参考价' : '放入培育列表，定期跟进');
   return {
     score,
     tier,
     emoji,
+    fit: ai?.fit ?? null,
     reasons: [...base.reasons, ...(ai?.aiReasons ?? [])],
-    advice: ai?.advice ?? (tier === '极高' || tier === '高' ? '建议优先 WhatsApp/邮件触达，附产品图与FOB参考价' : '放入培育列表，定期跟进'),
+    advice: ai?.fit === 'no' ? `与我方产品不对口：${advice}` : advice,
     scoredBy: ai ? 'rules+ai' : 'rules',
   };
 }

@@ -44,7 +44,7 @@ import { toVcf, toVCard } from './csv.js';
 import { calcPrice, quoteLines } from './pricing.js';
 import { proformaPdf } from './pdf.js';
 import { scanMarkets } from './market.js';
-import { videoScript, renderScript } from './content.js';
+import { videoScript, renderScript, spinText } from './content.js';
 import { MARKETS } from './markets.js';
 
 export const name = 'waimao';
@@ -99,6 +99,7 @@ export function apply(ctx) {
   registerProformaPdfTool(ctx);
   registerMarketScanTool(ctx);
   registerVideoScriptTool(ctx);
+  registerIcpSetTool(ctx);
   registerDataBackupTool(ctx);
 
   if (typeof ctx.inject === 'function') {
@@ -142,19 +143,32 @@ function pickSmtpAccount() {
   return { ...smtp, ...account, accountIndex: index % accounts.length };
 }
 
-/** 发送邮件的唯一入口：抑制列表拦截 + dry_run 总闸 + 退订脚注 + 线程头 + 审计。 */
+/** 发送邮件的唯一入口：日发送上限 + 抑制列表拦截 + spintax + dry_run 总闸 + 退订脚注 + 线程头 + 审计。 */
 async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId, actor = 'agent', inReplyTo, references, isFirstEmail }) {
+  const config = readConfig();
   const smtp = pickSmtpAccount();
   if (!smtp.host || !smtp.from) {
     throw new Error('SMTP 未配置（settings 页或 ~/.waimao/config.json 的 smtp 段）');
+  }
+  // 容量闸门：今天真实发送已达上限就停（保护域名信誉，防进垃圾箱）
+  const dailyCap = Number(config.smtp?.dailyCap ?? 0) || 0;
+  if (dailyCap > 0 && smtp.dryRun === false) {
+    const sentToday = auditMod.countRealSends(
+      auditMod.queryAudit({ action: 'email.send', since: auditMod.startOfLocalDay(), limit: 5000 }),
+    );
+    if (sentToday >= dailyCap) {
+      throw new Error(`今日已真实发送 ${sentToday} 封，达到 smtp.dailyCap=${dailyCap} 上限。为保护域名信誉，明天再发或调高上限（新域名建议 ≤30/天）`);
+    }
   }
   // 合规：抑制列表拦截
   const suppressed = suppressMod.isSuppressed(to);
   if (suppressed) {
     throw new Error(`收件人 ${to} 在抑制列表中（${suppressed.reason}，${suppressed.ts.slice(0, 10)}），拒绝发送`);
   }
+  // Spintax：{a|b|c} 随机选一项，让每封信略有差异
+  let finalSubject = spinText(subject);
   // 合规：首封开发信追加退订提示
-  let finalBody = String(body ?? '');
+  let finalBody = spinText(String(body ?? ''));
   if (isFirstEmail && smtp.unsubscribeFooter !== false) {
     const { withUnsubscribeFooter } = await import('./mail/templates.js');
     finalBody = withUnsubscribeFooter({ body: finalBody }, 'en').body;
@@ -162,21 +176,21 @@ async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId
   if (smtp.dryRun !== false) {
     const previewFile = join(EXPORT_DIR, `draft-${Date.now().toString(36)}.txt`);
     mkdirSync(EXPORT_DIR, { recursive: true });
-    writeFileSync(previewFile, `To: ${to}\nSubject: ${subject}\n${inReplyTo ? `In-Reply-To: ${inReplyTo}` : ''}\n\n${finalBody}`, { mode: 0o600 });
-    auditMod.audit('email.dry_run', { to, subject, leadId, preview: previewFile }, actor);
+    writeFileSync(previewFile, `To: ${to}\nSubject: ${finalSubject}\n${inReplyTo ? `In-Reply-To: ${inReplyTo}` : ''}\n\n${finalBody}`, { mode: 0o600 });
+    auditMod.audit('email.dry_run', { to, subject: finalSubject, leadId, preview: previewFile }, actor);
     return { dryRun: true, previewFile, message: 'smtp.dry_run=true：未真实发送，草稿已存盘' };
   }
-  // 打开/点击追踪：配置了公网入口时，生成 HTML 替身（像素+链接包裹）
+  // 打开/点击追踪：配置了公网入口且未开纯文本模式时，生成 HTML 替身（像素+链接包裹）
   let html;
   let tracking = null;
-  const trackBase = trackMod.trackingEnabled();
+  const trackBase = smtp.plainText === true ? null : trackMod.trackingEnabled();
   if (trackBase) {
-    tracking = trackMod.createTracking({ leadId, to, subject });
+    tracking = trackMod.createTracking({ leadId, to, subject: finalSubject });
     const built = trackMod.buildTrackedHtml({ text: finalBody, trackId: tracking.id, base: trackBase });
     html = built.html;
   }
-  const result = await sendMail(smtp, { from: smtp.from, fromName: smtp.fromName, to, toName, subject, body: finalBody, html, replyTo: smtp.replyTo, inReplyTo, references, attachments });
-  auditMod.audit('email.send', { to, subject, leadId, messageId: result.messageId, threaded: Boolean(inReplyTo), tracked: Boolean(tracking) }, actor);
+  const result = await sendMail(smtp, { from: smtp.from, fromName: smtp.fromName, to, toName, subject: finalSubject, body: finalBody, html, replyTo: smtp.replyTo, inReplyTo, references, attachments });
+  auditMod.audit('email.send', { to, subject: finalSubject, leadId, messageId: result.messageId, threaded: Boolean(inReplyTo), tracked: Boolean(tracking) }, actor);
   return { dryRun: false, trackId: tracking?.id ?? null, ...result };
 }
 
@@ -251,7 +265,7 @@ function registerLeadEnrichTool(ctx) {
   ctx.tools.register({
     name: 'lead_enrich',
     description:
-      '线索加工管线：对 lead_search 的结果抓取网页 → 提取联系方式(邮箱/WhatsApp/电话/社媒) → 规则引擎过滤(排除同行/B2B平台/黄页/招聘) → AI评分分级(0-12分,🔴🟠🟡🟢) → 自动存入CRM(去重合并)。这是把"链接"变成"客户"的核心工具。',
+      '线索加工管线：对 lead_search 的结果抓取网页 → 提取联系方式(邮箱/WhatsApp/电话/社媒) → 规则引擎过滤(排除同行/B2B平台/黄页/招聘) → AI评分分级(0-12分,🔴🟠🟡🟢,按 icp_set 的画像判断是否对口) → 自动存入CRM(去重合并)。',
     parameters: {
       type: 'object',
       properties: {
@@ -324,7 +338,6 @@ function registerLeadScoreTool(ctx) {
           continue;
         }
         const scored = await scoreLead({
-          product: '',
           market: lead.market,
           item: {
             title: lead.title,
@@ -333,8 +346,8 @@ function registerLeadScoreTool(ctx) {
           },
           useAI: args?.use_ai,
         });
-        crmMod.updateLead(id, { score: scored.score, tier: scored.tier, advice: scored.advice }, { activityNote: `重评分: ${scored.score}(${scored.tier})` });
-        results.push({ id, score: scored.score, tier: scored.tier, advice: scored.advice });
+        crmMod.updateLead(id, { score: scored.score, tier: scored.tier, fit: scored.fit, advice: scored.advice }, { activityNote: `重评分: ${scored.score}(${scored.tier})` });
+        results.push({ id, score: scored.score, tier: scored.tier, fit: scored.fit, advice: scored.advice });
       }
       return { scored: results.length, results };
     },
@@ -397,7 +410,7 @@ function registerEmailComposeTool(ctx) {
   ctx.tools.register({
     name: 'email_compose',
     description:
-      '撰写开发信草稿（不发送）：优先 DeepSeek 个性化生成（带知识库上下文），回退双语模板。拉美市场自动西语。SOP 任务进行中时传 task_id 会把草稿挂到任务上等待审批。',
+      '撰写开发信草稿（不发送）：优先 DeepSeek 个性化生成（带知识库上下文），回退双语模板。拉美市场自动西语。产品与买家画像取自 icp_set 设置的 ICP，没设置过就先问用户或调 icp_set。SOP 任务进行中时传 task_id 会把草稿挂到任务上等待审批。',
     parameters: {
       type: 'object',
       properties: {
@@ -426,12 +439,14 @@ function registerEmailComposeTool(ctx) {
         templatesMod.markUsed(template.id);
         draft = { language: template.language, subject: template.subject, body: template.body, generatedBy: `template:${template.name}` };
       } else {
+        const icp = readConfig().icp ?? {};
         draft = await composeMod.composeEmail({
           kind: args?.kind ?? 'first',
           step: args?.step,
           name: lead.contacts?.contactName ?? '',
           company: lead.company || lead.domain,
-          product: '',
+          product: icp.product || 'our products',
+          buyers: icp.buyers || undefined,
           market: lead.market,
           language: args?.language,
           useAI: args?.use_ai,
@@ -1332,6 +1347,33 @@ function registerVideoScriptTool(ctx) {
   });
 }
 
+function registerIcpSetTool(ctx) {
+  ctx.tools.register({
+    name: 'icp_set',
+    description:
+      '设置 ICP 画像：我方产品（一句英文，如 professional hair dryers 1800-2400W）和对口买家类型（如 wholesalers, beauty supply distributors, salon equipment dealers）。设置后 lead_enrich/lead_score 评分会判断线索是否对口并给出理由，email_compose 写信也知道你卖什么。用户在对话里描述完产品后主动调用。',
+    parameters: {
+      type: 'object',
+      properties: {
+        product: { type: 'string', description: '产品一句话（英文）' },
+        buyers: { type: 'string', description: '对口买家类型（英文，逗号分隔）' },
+      },
+      required: ['product'],
+    },
+    isConcurrencySafe: () => true,
+    presentCall: (args) => ({ card: 'generic', title: `icp_set: ${args?.product ?? ''}`, kind: 'config', rawInput: args }),
+    async execute(args) {
+      const product = String(args?.product ?? '').trim().slice(0, 300);
+      const buyers = String(args?.buyers ?? '').trim().slice(0, 300);
+      if (!product) {
+        throw new Error('product 不能为空');
+      }
+      configMod.writeConfig({ icp: { product, buyers } });
+      return { saved: true, icp: { product, buyers }, note: '已生效：之后的评分和开发信都会带上这个画像' };
+    },
+  });
+}
+
 function registerDataBackupTool(ctx) {
   ctx.tools.register({
     name: 'data_backup',
@@ -1744,7 +1786,7 @@ function registerRoutes(scope) {
       });
       httpMod.sendJson(res, 200, records.map((item) => ({
         url: item.url, title: item.title, company: item.company, kind: item.kind, keep: item.keep,
-        reason: item.reason, score: item.score, tier: item.tier, advice: item.advice,
+        reason: item.reason, score: item.score, tier: item.tier, fit: item.fit, advice: item.advice,
         contacts: item.contacts, leadId: item.leadId, merged: item.merged, error: item.error,
       })));
     } catch (error) {

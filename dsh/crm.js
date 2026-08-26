@@ -85,6 +85,7 @@ export function upsertLead(candidate, { actor = 'agent', merge = true } = {}) {
     if (incoming > before) {
       existing.score = candidate.score;
       existing.tier = candidate.tier ?? existing.tier;
+      existing.fit = candidate.fit ?? existing.fit;
       existing.reasons = candidate.reasons ?? existing.reasons;
       existing.advice = candidate.advice ?? existing.advice;
     }
@@ -113,6 +114,7 @@ export function upsertLead(candidate, { actor = 'agent', merge = true } = {}) {
     emailStatus: 'unknown', // unknown | guessed | valid | catch-all | invalid | no-mx | unverifiable
     score: candidate.score ?? 0,
     tier: candidate.tier ?? '低',
+    fit: candidate.fit ?? null,
     reasons: candidate.reasons ?? [],
     advice: candidate.advice ?? '',
     title: candidate.title ?? '',
@@ -150,7 +152,7 @@ export function updateLead(id, patch, { actor = 'agent', activityNote } = {}) {
     throw new Error(`invalid status: ${patch.status} (use ${STATUSES.join('/')})`);
   }
   const changed = {};
-  for (const key of ['status', 'tags', 'ownerNote', 'company', 'market', 'emailStatus', 'score', 'tier', 'advice', 'sequence', 'lastMessageId', 'lastReply', 'pendingEmail', 'dossier']) {
+  for (const key of ['status', 'tags', 'ownerNote', 'company', 'market', 'emailStatus', 'score', 'tier', 'fit', 'advice', 'sequence', 'lastMessageId', 'lastReply', 'pendingEmail', 'dossier']) {
     if (patch[key] !== undefined) {
       if (lead[key] !== patch[key]) {
         changed[key] = [lead[key], patch[key]];
