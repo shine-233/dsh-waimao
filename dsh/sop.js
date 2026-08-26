@@ -195,7 +195,7 @@ export function closeTask(taskId) {
     market: task.market,
     prospects: task.prospects.length,
     drafts: task.drafts.length,
-    approved: task.drafts.filter((draft) => draft.approved).length,
+    approved: task.drafts.filter((draft) => draft.approved?.hash === draft.hash).length,
     outreach: task.outreach.length,
     dryRunOnly: task.outreach.every((item) => item.dryRun),
     stageTrail: task.stageLog,
