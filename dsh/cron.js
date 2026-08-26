@@ -200,8 +200,11 @@ export function createSequenceJob({ sendEmail }) {
             ? `Re: ${String(lead.sequence.subject0).slice(0, 120)}`
             : step.subject;
           const result = await sendEmail({ lead, to: email, subject, body: step.body, inReplyTo: lead.lastMessageId, isFirstEmail: step.day === 0 && !lead.lastMessageId });
-          step.status = 'sent';
-          step.sentAt = new Date().toISOString();
+          // dueSteps 返回的是拷贝：必须通过 index 写回原步骤，
+          // 否则原步骤永远 pending → 下一轮 cron 把同样的跟进再发一遍（重复轰炸买家）
+          const originalStep = lead.sequence.steps[step.index];
+          originalStep.status = 'sent';
+          originalStep.sentAt = new Date().toISOString();
           crm.updateLead(lead.id, {
             sequence: lead.sequence,
             status: lead.status === 'new' || lead.status === 'qualified' ? 'contacted' : lead.status,
@@ -209,9 +212,10 @@ export function createSequenceJob({ sendEmail }) {
           }, { activityNote: `跟进序列 Day${step.day} 已发送: ${step.subject}` });
           sent += 1;
         } catch (error) {
-          step.status = 'failed';
-          step.error = String(error?.message ?? error).slice(0, 200);
-          crm.updateLead(lead.id, { sequence: lead.sequence }, { activityNote: `Day${step.day} 发送失败: ${step.error}` });
+          const originalStep = lead.sequence.steps[step.index];
+          originalStep.status = 'failed';
+          originalStep.error = String(error?.message ?? error).slice(0, 200);
+          crm.updateLead(lead.id, { sequence: lead.sequence }, { activityNote: `Day${step.day} 发送失败: ${originalStep.error}` });
           break; // 单封失败停止该线索本轮，下轮重试
         }
       }

@@ -231,6 +231,24 @@ function decodeBody(text, encoding) {
  * @returns {{messageId, inReplyTo, references, subject, from, date, body}}
  */
 /**
+ * 按 UTF-8 字节长度截断字符串。IMAP 字面量 {N} 的 N 是字节数，而响应已被
+ * StringDecoder 解码成 JS 字符串（UTF-16 码元）——多字节字符会让"取 N 个字符"
+ * 多拿或少拿。这里逐字符累计字节数，精确切到第 N 字节。
+ */
+function sliceByBytes(str, maxBytes) {
+  let bytes = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    const code = str.charCodeAt(i);
+    const size = code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code >= 0xd800 && code <= 0xdbff ? 4 : 3;
+    if (bytes + size > maxBytes) {
+      return str.slice(0, i);
+    }
+    bytes += size;
+  }
+  return str;
+}
+
+/**
  * 从 FETCH 响应里提取头块。优先按 IMAP 字面量 {N} 的字节长度截取——
  * 旧的正则懒惰匹配会在头值含括号时提前截断（如 From: "Foo (Trading Co.)" <a@b.com>），
  * 导致 Message-ID 丢失、回复被去重逻辑静默吞掉。
@@ -239,13 +257,9 @@ export function extractHeaderBlock(response) {
   const literal = response.match(/HEADER\.FIELDS \([^)]*\)\] ?\{(\d+)\}\r\n/i);
   if (literal) {
     const start = literal.index + literal[0].length;
-    // 多留一点余量应对原始 UTF-8 头（字节数>字符数），下面再精确裁掉尾部
-    let block = response.slice(start, start + Number(literal[1]) + 8);
-    const cuts = [block.indexOf('\r\n\r\n'), block.indexOf('\r\n)')].filter((i) => i >= 0);
-    if (cuts.length > 0) {
-      block = block.slice(0, Math.min(...cuts));
-    }
-    return block;
+    const block = sliceByBytes(response.slice(start), Number(literal[1]));
+    const cut = block.indexOf('\r\n\r\n');
+    return cut >= 0 ? block.slice(0, cut) : block;
   }
   // 兜底：不带字面量标记的响应
   return response.match(/HEADER\.FIELDS \([^)]*\)\] ?\r?\n?([\s\S]*?)\r?\n?\)/i)?.[1] ?? '';
@@ -254,7 +268,8 @@ export function extractHeaderBlock(response) {
 /**
  * 从 FETCH 响应里提取 TEXT 段。旧正则写成 BODY\[TEXT\]<0>\]（括号顺序反了），
  * 真实服务器响应是 `BODY[TEXT]<0> {N}`，导致正文永远提取不到、回复分类拿到空字符串。
- * 这里同样按字面量 {N} 字节长度定位。
+ * 按字面量 {N} 字节长度精确截断：字面量内容后紧跟 `)`（无 CRLF），启发式截断
+ * 会把右括号带进正文——"STOP)" 因此不匹配退订规则，真实场景已复现。
  */
 function extractTextBlock(response) {
   const literal = response.match(/BODY\[TEXT\](?:<0[^>]*>)? ?\{(\d+)\}\r\n/i);
@@ -263,12 +278,7 @@ function extractTextBlock(response) {
     return response.match(/BODY\[TEXT\][^\r\n]*?\r?\n?([\s\S]*?)(?:\r\n\)|\r?\nA\d{3} |$)/i)?.[1] ?? '';
   }
   const start = literal.index + literal[0].length;
-  let seg = response.slice(start, start + Number(literal[1]) + 8);
-  const cutMatches = [seg.indexOf('\r\n)'), seg.match(/\r?\nA\d{3} /)?.index].filter((i) => i >= 0);
-  if (cutMatches.length > 0) {
-    seg = seg.slice(0, Math.min(...cutMatches));
-  }
-  return seg;
+  return sliceByBytes(response.slice(start), Number(literal[1]));
 }
 
 export async function imapFetchMessage(session, sequence, { maxBody = 8000 } = {}) {
