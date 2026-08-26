@@ -14,7 +14,7 @@ import * as cronMod from './cron.js';
 import * as draftMod from './draft.js';
 import { companyDossier } from './enrich/dossier.js';
 import * as enrichMod from './enrich.js';
-import { findEmail, verifyEmail, guessEmails } from './enrich/emailfind.js';
+import { findEmail, verifyEmail } from './enrich/emailfind.js';
 import * as evolutionMod from './evolution.js';
 import * as httpMod from './http.js';
 import * as kbMod from './kb.js';
@@ -26,8 +26,7 @@ import { newSequence, dueSteps, sequenceSummary, stopSequence } from './mail/seq
 import { scanReplies } from './mail/replies.js';
 import { sendMail } from './mail/smtp.js';
 import * as monitorMod from './monitor.js';
-import { marketOptions } from './markets.js';
-import { mkdirSync, writeFileSync, statSync, readFileSync } from 'node:fs';
+import { marketOptions } from './markets.js';import { mkdirSync, writeFileSync, statSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as pagesMod from './pages.js';
 import { quotePdf, quoteFileName } from './pdf.js';
@@ -42,12 +41,11 @@ import * as warmupMod from './warmup.js';
 import { deliverabilityCheck } from './deliverability.js';
 import * as instantlyMod from './instantly.js';
 import * as templatesMod from './templates.js';
-import { toVcf, toVCard } from './csv.js';
+import { toVcf } from './csv.js';
 import { calcPrice, quoteLines } from './pricing.js';
 import { proformaPdf } from './pdf.js';
 import { scanMarkets } from './market.js';
 import { videoScript, renderScript, spinText } from './content.js';
-import { MARKETS } from './markets.js';
 
 export const name = 'waimao';
 
@@ -386,7 +384,7 @@ function registerLeadScoreTool(ctx) {
     parameters: {
       type: 'object',
       properties: {
-        lead_ids: { type: 'array', items: { type: 'string' }, description: '线索ID列表，缺省=全部 new/qualified 状态' },
+        lead_ids: { type: 'array', items: { type: 'string' }, description: '线索ID列表，缺省=new/qualified 各最多50条' },
         use_ai: { type: 'boolean', description: '默认true' },
       },
     },
@@ -506,6 +504,9 @@ function registerEmailComposeTool(ctx) {
       const kbContext = kbMod.contextFor(`${lead.market} ${lead.company} ${lead.domain} 报价 政策 产品`);
       let draft;
       const template = args?.template ? templatesMod.getTemplate(String(args.template)) : null;
+      if (args?.template && !template) {
+        throw new Error(`模板不存在: ${args.template}（template_list 可查）`);
+      }
       if (template) {
         templatesMod.markUsed(template.id);
         draft = { language: template.language, subject: template.subject, body: template.body, generatedBy: `template:${template.name}` };
@@ -644,6 +645,10 @@ function registerSequenceStartTool(ctx) {
           const variant = abMode ? abVariant(lead.id) : null;
           const templateId = variant === 'A' ? args.template_a : variant === 'B' ? args.template_b : null;
           const template = templateId ? templatesMod.getTemplate(String(templateId)) : null;
+          if (templateId && !template) {
+            results.push({ id, error: `模板不存在: ${templateId}（A/B 对比会失真，template_list 可查）` });
+            continue;
+          }
           const icp = readConfig().icp ?? {};
           const sequence = newSequence({ language });
           let first;
@@ -1230,7 +1235,7 @@ function registerQuotePdfTool(ctx) {
         items: args?.items ?? [],
         currency: args?.currency ?? defaults.currency ?? 'USD',
         leadTime: args?.lead_time ?? defaults.leadTime,
-        payment: args?.payment ?? (kbPolicy ? undefined : defaults.payment),
+        payment: args?.payment ?? defaults.payment,
         validity: args?.validity ?? defaults.validity,
         notes: args?.notes ?? defaults.notes,
       });
@@ -1502,6 +1507,7 @@ function registerDataBackupTool(ctx) {
         templates: data('templates.json'),
         messages: data('messages.json'),
         suppress: data('suppress.json'),
+        domainBlacklist: data('domain-blacklist.json'),
         sop: data('sop.json'),
         monitor: data('monitor.json'),
         tracking: data('tracking.json'),
@@ -1545,12 +1551,12 @@ function registerInstantlyTools(ctx) {
   ctx.tools.register({
     name: 'instantly_push_leads',
     description:
-      '把 CRM 线索批量推送到 Instantly 活动开跑：按状态/评分/对口过滤，自动映射标准字段（company_name/website，reason 进 personalization 变量），≤500/批。dry_run 默认 true 先看会推多少。',
+      '把 CRM 线索批量推送到 Instantly 活动开跑：默认排除 replied/won/lost（在谈客户不能进冷邮序列），按评分/对口过滤，reason 进 personalization 变量，≤500/批。dry_run 默认 true 先看会推多少。',
     parameters: {
       type: 'object',
       properties: {
         campaign_id: { type: 'string', description: 'Instantly 活动 ID' },
-        status: { type: 'string', description: 'CRM 状态过滤，默认 replied 之外的高分线索' },
+        status: { type: 'string', description: '显式指定则只推该状态；缺省=排除 replied/won/lost 的其余线索' },
         min_score: { type: 'number', description: '最低评分，默认 7' },
         fit: { type: 'string', enum: ['yes', 'partial'], description: '只推对口的，默认 yes' },
         limit: { type: 'number', description: '最多推多少条，默认 100' },
@@ -1565,11 +1571,13 @@ function registerInstantlyTools(ctx) {
       const minScore = Number(args?.min_score ?? 7);
       const fit = args?.fit ?? 'yes';
       const limit = Math.min(Number(args?.limit ?? 100), 1000);
-      const candidates = crmMod
-        .listLeads({ status: args?.status, limit: 500 })
+      const base = args?.status
+        ? crmMod.listLeads({ status: args.status, limit: 500 })
+        : crmMod.listLeads({ limit: 500 }).filter((lead) => !['replied', 'won', 'lost'].includes(lead.status));
+      const candidates = base
         .filter((lead) => lead.contacts.emails?.length)
         .filter((lead) => (Number(lead.score ?? 0) >= minScore))
-        .filter((lead) => (fit === 'any' ? true : !lead.fit || lead.fit === fit))
+        .filter((lead) => (fit === 'any' ? true : lead.fit === fit))
         .slice(0, limit);
       // 同邮箱去重（跨公司重复抓取时常见）
       const seenEmails = new Set();
@@ -2372,8 +2380,16 @@ function startCron() {
     everyMs: 30 * 60_000,
     description: '每日管线日报',
     fn: async () => {
-      // 归一化解析 HH:mm，容忍 "9:00" 这类不补零写法
-      const [hh, mm] = String(config.cron?.dailyReportAt ?? '09:00').split(':').map((part) => Number.parseInt(part, 10) || 0);
+      // 每次运行时读配置（改时间不用重启）；解析失败/越界回退 09:00
+      const raw = String(readConfig().cron?.dailyReportAt ?? '09:00').split(':');
+      let hh = Number.parseInt(raw[0], 10);
+      let mm = Number.parseInt(raw[1] ?? '0', 10);
+      if (!Number.isFinite(hh) || !Number.isFinite(mm)) {
+        hh = 9;
+        mm = 0;
+      }
+      hh = Math.min(23, Math.max(0, hh));
+      mm = Math.min(59, Math.max(0, mm));
       const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
       const targetMin = hh * 60 + mm;
       if (nowMin < targetMin || nowMin >= targetMin + 30) {

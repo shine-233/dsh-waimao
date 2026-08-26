@@ -81,13 +81,13 @@ export async function addLeads({ campaignId, leads, batchSize = 500 }) {
   return { total: clean.length, batches: results };
 }
 
-/** CRM 线索 → Instantly lead schema（reason 进 personalization 变量）。 */
+/** CRM 线索 → Instantly lead schema。没有真实联系人名就不填（公司名拆词当人名是垃圾数据），reason 进 personalization 变量。 */
 export function toInstantLead(lead) {
-  const name = String(lead.contacts?.person || lead.company || '').trim().split(/\s+/).filter(Boolean);
+  const parts = String(lead.contacts?.person ?? '').trim().split(/\s+/).filter(Boolean);
   return {
     email: lead.contacts?.emails?.[0] ?? '',
-    first_name: name[0] ?? null,
-    last_name: name.length > 1 ? name[name.length - 1] : null,
+    first_name: parts[0] ?? null,
+    last_name: parts.length > 1 ? parts[parts.length - 1] : null,
     company_name: lead.company || lead.domain || null,
     website: lead.domain ? `https://${lead.domain}` : null,
     personalization: [lead.fit ? `fit:${lead.fit}` : '', lead.advice || ''].filter(Boolean).join(' | ') || null,

@@ -45,7 +45,22 @@ export function guessEmails({ name, domain }) {
   const first = (parts[0] ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
   const last = (parts[parts.length - 1] ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
   const guessed = first ? PATTERNS.map((fn) => fn(first, last || first[0])) : [];
-  return [...new Set([...guessed, ...role].map((local) => `${local}@${cleanDomain}`))];
+  // 姓名模式与 role 账号穿插（2:1）：默认 limit=6 截断时 purchasing@ 这类
+  // 外贸关键角色地址也能轮到，不会被 20 个姓名模式挤到永远探不到
+  const merged = [];
+  let gi = 0;
+  let ri = 0;
+  while (gi < guessed.length || ri < role.length) {
+    for (let k = 0; k < 2 && gi < guessed.length; k += 1) {
+      merged.push(guessed[gi]);
+      gi += 1;
+    }
+    if (ri < role.length) {
+      merged.push(role[ri]);
+      ri += 1;
+    }
+  }
+  return [...new Set(merged)].map((local) => `${local}@${cleanDomain}`);
 }
 
 async function dnsCheck(domain) {

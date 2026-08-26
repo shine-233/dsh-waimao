@@ -45,6 +45,9 @@ assert.ok(guesses.includes('john@beautyimports.mx'));
 assert.ok(guesses.includes('john.garcia@beautyimports.mx'));
 assert.ok(guesses.includes('jgarcia@beautyimports.mx'));
 assert.ok(guesses.includes('info@beautyimports.mx'));
+// 姓名模式与 role 账号穿插：默认 limit=6 截断时 purchasing@ 也要在前列
+const first6 = guesses.slice(0, 6);
+assert.ok(first6.some((email) => /^(purchasing|sales|info)@/.test(email)), `前6个候选应含关键 role 地址: ${first6.join(',')}`);
 assert.equal(guessEmails({ name: '', domain: 'x' }).length, 0);
 
 /* ---------- score 规则分 ---------- */

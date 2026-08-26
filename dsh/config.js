@@ -273,6 +273,7 @@ export function configSummary() {
       payment: config.quote?.payment ?? '',
       leadTime: config.quote?.leadTime ?? '',
       validity: config.quote?.validity ?? '',
+      notes: config.quote?.notes ?? '',
       bank: config.quote?.bank ?? {},
     },
     cron: config.cron ?? {},

@@ -104,7 +104,7 @@ export function warmupConfigured() {
   return Boolean(config.warmup?.enabled && poolParticipants(config).length >= 2);
 }
 
-/** 今日已发业务邮件数（审计推导），仅供参考展示；预热自身的量由本轮内计数约束。 */
+/** 今日已发的预热邮件数（审计按 email.warmup 统计）——爬坡额度只约束预热自身。 */
 export function todayBudget() {
   const config = readConfig();
   const db = load();
@@ -120,7 +120,7 @@ export function todayBudget() {
 
 function querySentToday(today) {
   try {
-    return queryAudit({ action: 'email.send', limit: 1000 }).filter((entry) => entry.ts.startsWith(today)).length;
+    return queryAudit({ action: 'email.warmup', limit: 1000 }).filter((entry) => entry.ts.startsWith(today)).length;
   } catch {
     return 0;
   }
@@ -213,9 +213,11 @@ async function engageReceiver(receiver, participantEmails, tag) {
       }
       for (const senderEmail of others) {
         const seqs = await imapSearchFrom(session, senderEmail, new Date(Date.now() - 7 * 86_400_000)).catch(() => []);
-        for (const seq of seqs.slice(-5)) {
+        // SEARCH 返回序列号：用序列号版 MOVE（UID 版会语义错位）；倒序处理，
+        // 每移一封后面的序列号会整体前移，正序迭代会拿旧号错位
+        for (const seq of [...seqs].slice(-5).reverse()) {
           try {
-            await session.exec(`UID MOVE ${seq} INBOX`);
+            await session.exec(`MOVE ${seq} INBOX`);
             rescued += 1;
           } catch {}
         }
@@ -225,8 +227,9 @@ async function engageReceiver(receiver, participantEmails, tag) {
       }
     }
     return { replied, rescued };
-  } catch {
-    return null;
+  } catch (error) {
+    // 失败要留痕，否则"自动回复从不发生"无从排查
+    return { error: String(error?.message ?? error).slice(0, 150) };
   } finally {
     if (session) {
       await imapLogout(session);
@@ -308,16 +311,21 @@ export async function runWarmupRound({ signal } = {}) {
       continue;
     }
     const engagement = await engageReceiver(receiver, pool.map((p) => p.email), randomUUID().slice(0, 8));
-    if (engagement) {
+    if (engagement?.error) {
+      audit('warmup.engage.fail', { email: receiver.email, error: engagement.error }, 'cron');
+      results.push({ leg: 'engage', email: receiver.email, ok: false, error: engagement.error });
+    } else if (engagement) {
       results.push({ leg: 'engage', email: receiver.email, ok: true, ...engagement });
       audit('warmup.engage', { email: receiver.email, replied: engagement.replied, rescued: engagement.rescued }, 'cron');
     }
   }
 
   const entry = { day: today, at: new Date().toISOString(), results };
-  // 全部失败时不写当日 latch，下一轮自动重试（否则预热线当天静默空转）
-  const okCount = results.filter((item) => item.ok).length;
-  const attempted = results.filter((item) => item.leg !== 'skipped').length;
+  // 全部失败时不写当日 latch，下一轮自动重试（否则预热线当天静默空转）。
+  // 只看发送腿：互动腿成功不代表预热邮件发出去了
+  const poolLegs = results.filter((item) => item.leg === 'pool');
+  const attempted = poolLegs.length;
+  const okCount = poolLegs.filter((item) => item.ok).length;
   if (attempted > 0 && okCount === 0) {
     return { day: today, results, note: '本轮全部失败，未记当日完成，稍后重试' };
   }

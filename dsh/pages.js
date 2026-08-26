@@ -919,8 +919,8 @@ function templatesPage() {
     `api('api/templates',{method:'POST',body:JSON.stringify({name:name,language:back.querySelector('#nt-lang').value,subject:subject,body:body})})` +
     `.then(function(r){if(!r.ok){toast(r.j.error,'err');return;}closeModal();toast('模板已保存');loadTpls();});};};` +
     `api('api/quote-defaults').then(function(r){if(!r.ok)return;var q=r.j;` +
-    `var map={currency:'#q-currency',payment:'#q-payment',leadTime:'#q-leadTime',validity:'#q-validity'};` +
-    `Object.keys(map).forEach(function(k){var el=document.querySelector(map[k]);if(el&&q[k])el.value=q[k];});` +
+    `var map={currency:'#q-currency',payment:'#q-payment',leadTime:'#q-leadTime',validity:'#q-validity',notes:'#q-notes'};` +
+    `Object.keys(map).forEach(function(k){var el=document.querySelector(map[k]);if(el&&q[k]!==undefined&&q[k]!==null)el.value=String(q[k]);});` +
     `var bank=q.bank||{};` +
     `[['bankName','#q-bankName'],['bankAccount','#q-bankAccount'],['bankSwift','#q-bankSwift'],['bankBeneficiary','#q-bankBeneficiary']].forEach(function(p){var el=document.querySelector(p[1]);if(el&&bank[p[0]])el.value=bank[p[0]];});` +
     `});` +

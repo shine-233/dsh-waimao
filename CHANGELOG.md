@@ -24,6 +24,18 @@
 ### 工具数
 48 → **50**（并行线加了 instantly_campaign_list / instantly_push_leads）；网页 4 → **5**
 
+### 三路复审修复（合并后全量再审）
+- **预热池救垃圾箱用错编号**：`UID MOVE` 配的是 SEARCH 序列号——轻则静默失效，重则把垃圾箱里无关邮件挪进收件箱；改用序列号版 MOVE 并倒序处理（MOVE 后序列号会前移，正序迭代拿旧号错位）
+- **预热 latch 被互动腿虚增**：发送腿全失败但 IMAP 互动"成功"也会写当日完成标记，当天不再重试；改为只统计发送腿
+- **instantly_push_leads 缺省会推已回复/已成交客户**（投诉风险）：默认排除 replied/won/lost；fit 过滤改严格（未评分线索不再放行）
+- **toInstantLead 不再拿公司名拆人名**（"Acme Trading Co Ltd"→first:"Acme"/last:"Ltd" 的垃圾个性化），无真实联系人名就置空
+- **报价条款表单静默清空备注**：notes 此前不回填但保存无条件上送，改任何字段点保存就把已配置的备注清成空串；现在回填+保存闭环
+- **quote_pdf 的 KB 命中反而丢配置**：KB 命中时 payment 兜底被跳过退化成硬编码 'T/T'，去掉这个特殊门控
+- **dailyReportAt 非法输入导致日报轰炸**：负数小时使窗口恒真，每 30 分钟发一次日报；加钳制与 NaN 回退，且改为运行时读配置（改时间不用重启）
+- 预热互动失败留审计痕（此前 IMAP 凭据缺失时静默失败，无从排查）
+- emailfind 候选穿插：role 地址（purchasing@ 等外贸关键角色）按 2:1 插入姓名模式，默认 limit=6 截断时也能探到
+- A/B 模板名写错从静默变 AI 改为显式报错（对比失真无告警）；data_backup 补 domain-blacklist.json；README 网页数/SOP 表述修正；清死导入
+
 ### 预热池 + Instantly 实现（并行线）
 - **多收件箱预热池**：参与池 = 主账号 + `smtp.accounts`（`warmup:false` 退出）+ 传统 partners，≥2 个邮箱按天轮换配对互发；每邮箱独立爬坡计时（各自从首次参与起算）；收件侧自动回复/标星已读 + **误入垃圾箱 UID MOVE 回 INBOX**（[Gmail]/Spam、Junk 等逐一探测，服务器不支持则跳过）；4 组内容模板按标签哈希轮换，配 DeepSeek key 时可生成自然语句（失败回退模板）；互动自动化改走 ImapSession.exec 规范标签机
 - **Instantly 客户端**（`dsh/instantly.js`）：严格对齐官方 OpenAPI v2——Bearer 鉴权、`POST /api/v2/leads/add`（campaign_id/list_id 二选一、≤1000/批、company_name/job_title/personalization 字段）、`GET campaigns/accounts`；`instantly_push_leads` 按状态/最低评分/fit 过滤 + 同邮箱去重 + ≤500/批推送，reason 进 personalization 变量，dry_run 默认 true；走 serp.proxy 可用
