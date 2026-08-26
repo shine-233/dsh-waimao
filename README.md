@@ -1,21 +1,23 @@
 # dsh-waimao 🌐💬
 
-**DeepSeek Harness (dsh) 外贸获客全家桶插件**：从「搜到链接」到「成交回款」的完整闭环，全部装进你的 dsh。
+**DeepSeek Harness (dsh) 外贸获客插件**：从「搜到链接」到「成交回款」的完整流程，全部装进你的 dsh。
 
 ```
-三层搜索 → 提取联系方式 → 规则过滤 → AI评分 → 邮箱验证 → 开发信(dry-run,线程头)
+设置ICP画像 → 三层搜索 → 提取联系方式 → 规则过滤 → AI评分(判断是否对口)
+   → 邮箱验证 → 开发信(dry-run,线程头,spintax,日上限)
    → 人工审批 → 触达(邮件/WhatsApp) → IMAP回复扫描+AI分类 → 跟进序列
    → CRM管线 → 官网监控(意图信号) → 报价PDF → 结案复盘 → 效果统计
 ```
 
-## 功能总览（38 个对话工具 + 4 个网页）
+## 功能总览（49 个对话工具 + 4 个网页）
 
 | 模块 | 能力 |
 |---|---|
+| 🎯 **ICP 画像** | `icp_set` 一句话设置"卖什么+找什么买家"；评分判断线索是否对口（对口/沾边/不对口+理由），写开发信自动带上产品 |
 | 🌐 **谷歌获客** | 三层公式（基础搜索/LinkedIn职位定向/采购信号）、18个市场预设、逐层去重、引擎自动 failover、Google Maps 商家数据源(serpapi)、CSV导出 |
 | 🧪 **线索加工** | 抓页提取邮箱/WhatsApp/电话/社媒、**规则引擎过滤**（同行/B2B平台/黄页/招聘/社媒一眼排除）、**AI评分0-12分**（🔴极高/🟠高/🟡中/🟢低+开发建议）、自动入CRM去重合并 |
 | 📧 **邮箱发现验证** | 35+模式猜测 + MX记录 + SMTP RCPT探测 + catch-all检测（hunter.io 开源平替） |
-| ✉️ **开发信** | DeepSeek 个性化生成（带知识库引用）/ 三语模板兜底（英/西/**葡**，拉美自动切西语、巴西切葡语）、零依赖SMTP客户端、**dry-run 总闸默认开**、**回复线程头**、**退订脚注** |
+| ✉️ **开发信** | DeepSeek 个性化生成（带知识库引用）/ 三语模板兜底（英/西/**葡**，拉美自动切西语、巴西切葡语）、零依赖SMTP客户端、**dry-run 总闸默认开**、**回复线程头**、**退订脚注**、**Spintax 变体**（{a\|b\|c} 群发每封略有差异）、**每日发送上限**（保护新域名） |
 | 📬 **回复检测闭环** | **IMAP 扫描买家回复 → AI 分类（感兴趣/询价/拒绝/休假/退订）→ 自动改 replied + 停序列**，退订自动进抑制列表 |
 | 🛡️ **合规** | 抑制列表（发送强制拦截）、退订提示行、全量审计日志 |
 | 📅 **跟进序列** | Day 0/3/7/14 四步自动跟进（挂原邮件线程）、回复即停、cron 定时执行 |
@@ -49,12 +51,14 @@ npx -y @deepseek-ai/dsh plugin --profile web add github:shine-233/dsh-waimao
 ## 快速上手（对话里说人话即可）
 
 ```
+我卖电吹风，找欧美批发商          → icp_set 存好画像（第一次用先做这个）
+
 帮我开发墨西哥电吹风买家
 → sop_create → lead_search → lead_enrich → lead_score → email_compose
 → [人工审批] → email_send → 结案报告
 
 看看这些线索质量怎么样
-→ lead_enrich → 按 🔴🟠🟡🟢 分层汇报，附联系方式和开发建议
+→ lead_enrich → 按 🔴🟠🟡🟢 分层汇报，附对口判断、联系方式和开发建议
 
 给这个客户报1000台FOB价
 → kb_search(报价政策) → quote_pdf → wa_send_media / email_send
@@ -66,6 +70,7 @@ npx -y @deepseek-ai/dsh plugin --profile web add github:shine-233/dsh-waimao
 
 ```jsonc
 {
+  "icp": { "product": "professional hair dryers 1800-2400W", "buyers": "wholesalers, beauty supply distributors" },
   "serp": {
     "engine": "ddg", "serpapiKey": "", "perLayer": 10,
     "proxy": "http://127.0.0.1:7890",   // 大陆网络必填
@@ -76,7 +81,9 @@ npx -y @deepseek-ai/dsh plugin --profile web add github:shine-233/dsh-waimao
   "smtp": {
     "host": "smtp.gmail.com", "port": 465, "secure": true,
     "user": "", "pass": "", "from": "", "fromName": "Sales",
-    "dryRun": true          // ⚠️ 总闸：确认能跑通后再改 false
+    "dryRun": true,         // ⚠️ 总闸：确认能跑通后再改 false
+    "dailyCap": 300,        // 每日真实发送上限，新域名建议 20-30
+    "plainText": false      // 纯文本模式：不注入追踪，投递率更好
   },
   "cron": { "enabled": true, "waSyncEveryMin": 30, "sequenceCheckEveryMin": 60, "dailyReportAt": "09:00", "staleDays": 7 },
   "wa": { "dailyBroadcastCap": 200, "minDelaySec": 20, "maxDelaySec": 90 },

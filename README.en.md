@@ -3,17 +3,18 @@
 **Full-stack foreign-trade customer acquisition plugin for DeepSeek Harness (dsh).** Chinese docs: [README.md](./README.md)
 
 ```
-3-layer Google search → contact extraction → rule filtering → AI scoring → email verify
-  → cold email (dry-run, threading) → human approval → outreach (email/WhatsApp)
+ICP profile → 3-layer Google search → contact extraction → rule filtering → AI scoring (ICP fit)
+  → email verify → cold email (dry-run, threading, spintax, daily cap) → human approval → outreach (email/WhatsApp)
   → IMAP reply scan + AI classification → follow-up sequences → CRM pipeline
   → website change monitoring → quotes → close & report
 ```
 
 ## Highlights
 
+- **ICP profile**: `icp_set` stores what you sell and who counts as your buyer. Scoring judges each lead's fit (yes/partial/no, with a reason — the OpenOutreach "reason per lead" idea), and email drafts know your product.
 - **Lead enrichment**: fetch pages, extract emails/WhatsApp/phones/socials, rule-engine excludes suppliers/B2B platforms/directories/job boards, AI scoring 0-12 with tiers and approach advice, auto-merge into CRM.
 - **Email finder & verifier**: 35+ pattern guesses + MX + SMTP RCPT probing + catch-all detection (open-source Hunter.io alternative).
-- **Cold email**: zero-dep SMTP client (implicit TLS / STARTTLS / AUTH), DeepSeek-personalized drafts with knowledge-base citations, bilingual templates (EN/ES/PT, auto-Spanish for LatAm), unsubscribe footer, **dry-run master switch**, **reply threading (In-Reply-To/References)**.
+- **Cold email**: zero-dep SMTP client (implicit TLS / STARTTLS / AUTH), DeepSeek-personalized drafts with knowledge-base citations, trilingual templates (EN/ES/PT, auto-Spanish for LatAm), unsubscribe footer, **dry-run master switch**, **reply threading (In-Reply-To/References)**, **spintax variants** `{a|b|c}`, **per-day send cap** to protect new domains, optional **plain-text mode**.
 - **Reply loop (closed!)**: IMAP scan finds buyer replies, AI classifies them (interested / pricing / not-interested / OOO / auto / unsubscribe), auto-updates CRM to `replied`, stops sequences, auto-suppresses unsubscribes.
 - **CRM pipeline**: 7-stage state machine, contact profiles, activities, cross-search dedup & merge, CSV export.
 - **SOP stage machine**: 8 server-enforced stages, **human approval gate bound to content hash** (fail-closed), full audit log.
@@ -22,7 +23,7 @@
 - **Automation**: cron jobs (inbox polling, sequence execution, daily report, stale alerts, reply scan, site monitor).
 - **WhatsApp**: review desk (AI draft + human approve), media messages, rate-controlled broadcast (random delay + daily cap + circuit breaker).
 - **Quotes**: English quotation PDF, zero dependencies.
-- **38 chat tools + 4 web pages**, zero npm dependencies, Node ≥ 22.13.
+- **49 chat tools + 4 web pages**, zero npm dependencies, Node ≥ 22.13.
 
 ## Install
 
@@ -38,8 +39,9 @@ Open `http://127.0.0.1:3080/waimao/leads` after restarting `dsh web`. Configure 
 
 ```jsonc
 {
+  "icp":    { "product": "professional hair dryers 1800-2400W", "buyers": "wholesalers, beauty supply distributors" },
   "serp":   { "engine": "ddg", "proxy": "http://127.0.0.1:7890", "chain": ["ddg", "serpapi"] },
-  "smtp":   { "host": "smtp.gmail.com", "port": 465, "user": "", "pass": "", "from": "", "dryRun": true },
+  "smtp":   { "host": "smtp.gmail.com", "port": 465, "user": "", "pass": "", "from": "", "dryRun": true, "dailyCap": 300, "plainText": false },
   "imap":   { "host": "imap.gmail.com", "port": 993, "user": "", "pass": "" },
   "evolution": { "baseURL": "http://127.0.0.1:8080", "apiKey": "", "instance": "" },
   "deepseek":  { "apiKey": "" },
