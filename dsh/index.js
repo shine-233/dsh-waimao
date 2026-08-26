@@ -158,8 +158,23 @@ function pickSmtpAccount(sentByAccount = new Map()) {
   return { ...smtp, ...accounts[index % accounts.length], accountIndex: index % accounts.length };
 }
 
+/**
+ * 首触冷邮件审批闸（对齐 gtm-mcp/Instantly 的"激活"模式）：
+ * 智能体自主发起的首触（无线程、无审批凭证）默认拒绝；网页人工发送、
+ * 回复/线程跟进、SOP 已批准草稿、cron 序列（启动序列本身是用户显式操作）放行。
+ */
+export function coldSendNeedsApproval({ approvedVia, actor, inReplyTo }, allowWithoutApproval = false) {
+  if (allowWithoutApproval || approvedVia) {
+    return false;
+  }
+  if (inReplyTo) {
+    return false; // 买家已回复的会话跟进不算冷触达
+  }
+  return actor !== 'user'; // 网页按钮=人点的，天然是审批
+}
+
 /** 发送邮件的唯一入口：日发送上限 + 抑制列表拦截 + spintax + dry_run 总闸 + 退订脚注 + 线程头 + 审计。 */
-async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId, actor = 'agent', inReplyTo, references, isFirstEmail }) {
+async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId, actor = 'agent', inReplyTo, references, isFirstEmail, approvedVia }) {
   const config = readConfig();
   // 域名黑名单：退信/投诉过的公司域名整体拒发（同公司其他联系人大概率也是坏地址）
   const blacklisted = suppressMod.isDomainBlacklisted(suppressMod.domainOf(to));
@@ -170,10 +185,14 @@ async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId
   if (suppressed) {
     throw new Error(`收件人 ${to} 在抑制列表中（${suppressed.reason}，${suppressed.ts.slice(0, 10)}），拒绝发送`);
   }
-  // 今日已发审计一次取回，供全局上限与每邮箱上限共用
+  // 今日已发审计一次取回，供全局上限与每邮箱上限共用（业务 email.send + 预热 email.warmup）
   let todaysSends = [];
+  let todaysWarmup = [];
   try {
     todaysSends = auditMod.queryAudit({ action: 'email.send', since: auditMod.startOfLocalDay(), limit: 5000 });
+  } catch {}
+  try {
+    todaysWarmup = auditMod.queryAudit({ action: 'email.warmup', since: auditMod.startOfLocalDay(), limit: 5000 });
   } catch {}
   const sentByAccount = new Map();
   for (const entry of todaysSends) {
@@ -186,17 +205,31 @@ async function sendEmailGuarded({ to, toName, subject, body, attachments, leadId
   if (!smtp.host || !smtp.from) {
     throw new Error('SMTP 未配置（settings 页或 ~/.waimao/config.json 的 smtp 段）');
   }
-  // 每邮箱独立上限（per-mailbox cap）
-  const mailboxCap = Number(smtp.dailyCap ?? 0) || 0;
-  if (mailboxCap > 0 && smtp.dryRun === false && (sentByAccount.get(smtp.from) ?? 0) >= mailboxCap && config.smtp?.accounts?.length) {
-    throw new Error(`账号 ${smtp.from} 今日已达自身上限 ${mailboxCap} 封。可在 smtp.accounts 里加更多收件箱或调高该账号 dailyCap`);
-  }
-  // 容量闸门：今天真实发送已达全局上限就停（保护域名信誉，防进垃圾箱）
-  const dailyCap = Number(config.smtp?.dailyCap ?? 0) || 0;
-  if (dailyCap > 0 && smtp.dryRun === false) {
-    const sentToday = auditMod.countRealSends(todaysSends);
-    if (sentToday >= dailyCap) {
-      throw new Error(`今日已真实发送 ${sentToday} 封，达到 smtp.dailyCap=${dailyCap} 全局上限。为保护域名信誉，明天再发或调高上限（新域名建议 ≤30/天）`);
+  if (smtp.dryRun === false) {
+    // 首触审批闸
+    if (coldSendNeedsApproval({ approvedVia, actor, inReplyTo }, config.smtp?.allowColdSendWithoutApproval === true)) {
+      throw new Error('首触冷邮件需人工审批：走 email_compose(task_id=…) → sop_review → sop_approve 后再发；或设置页开启 smtp.allowColdSendWithoutApproval 自行担责');
+    }
+    // 每邮箱总上限（业务+预热合计；服务商只看邮箱当天总量）
+    const totalCap = Number(config.smtp?.mailboxTotalCap ?? 0) || 0;
+    if (totalCap > 0) {
+      const warmupFrom = todaysWarmup.filter((entry) => entry.detail?.account === smtp.from).length;
+      if ((sentByAccount.get(smtp.from) ?? 0) + warmupFrom >= totalCap) {
+        throw new Error(`账号 ${smtp.from} 今日总发信量（业务+预热）已达 mailboxTotalCap=${totalCap}。保护邮箱信誉，明天再发或调整上限`);
+      }
+    }
+    // 每邮箱独立上限（per-mailbox cap，仅统计业务发送）
+    const mailboxCap = Number(smtp.dailyCap ?? 0) || 0;
+    if (mailboxCap > 0 && (sentByAccount.get(smtp.from) ?? 0) >= mailboxCap && config.smtp?.accounts?.length) {
+      throw new Error(`账号 ${smtp.from} 今日已达自身上限 ${mailboxCap} 封。可在 smtp.accounts 里加更多收件箱或调高该账号 dailyCap`);
+    }
+    // 容量闸门：今天真实发送已达全局上限就停（保护域名信誉，防进垃圾箱）
+    const dailyCap = Number(config.smtp?.dailyCap ?? 0) || 0;
+    if (dailyCap > 0) {
+      const sentToday = auditMod.countRealSends(todaysSends);
+      if (sentToday >= dailyCap) {
+        throw new Error(`今日已真实发送 ${sentToday} 封，达到 smtp.dailyCap=${dailyCap} 全局上限。为保护域名信誉，明天再发或调高上限（新域名建议 ≤30/天）`);
+      }
     }
   }
   // Spintax：{a|b|c} 随机选一项，让每封信略有差异
@@ -548,7 +581,7 @@ function registerEmailSendTool(ctx) {
   ctx.tools.register({
     name: 'email_send',
     description:
-      '发送开发信。受 smtp.dry_run 总闸约束（默认 true 只存预览不发送）与 smtp.dailyCap 日上限约束。SOP 任务中发送需草稿已批准，且实际发送内容以已批准草稿为准（哈希绑定，参数内容会被忽略）。发送后自动记 CRM 活动，replied 前状态改为 contacted。',
+      '发送开发信。受 smtp.dry_run 总闸（默认 true 只存预览）与日上限约束。SOP 任务中发送需草稿已批准且以批准稿为准。首触冷邮件默认还需审批：不带 task_id/draft_id 直接发会被拒绝——走 email_compose(task_id)→sop_review→sop_approve，或让用户在设置页开 smtp.allowColdSendWithoutApproval；回复/线程跟进与网页手动发送不受此限。',
     parameters: {
       type: 'object',
       properties: {
@@ -572,6 +605,7 @@ function registerEmailSendTool(ctx) {
       // 只在无 SOP 时生效——防止审批后被偷换内容。
       let finalSubject = String(args?.subject ?? '');
       let finalBody = String(args?.body ?? '');
+      let approvedVia;
       if (args?.task_id && args?.draft_id) {
         const sopDraft = sopMod.assertApproved(args.task_id, args.draft_id);
         if (sopDraft.leadId && sopDraft.leadId !== lead.id) {
@@ -579,6 +613,7 @@ function registerEmailSendTool(ctx) {
         }
         finalSubject = sopDraft.subject;
         finalBody = sopDraft.body;
+        approvedVia = 'sop';
       }
       const to = lead.contacts.emails?.[0];
       if (!to) {
@@ -594,6 +629,7 @@ function registerEmailSendTool(ctx) {
         // 跟进邮件挂原线程（回复检测依赖 In-Reply-To）
         inReplyTo: lead.lastMessageId,
         isFirstEmail,
+        approvedVia,
       });
       if (!result.dryRun) {
         crmMod.updateLead(lead.id, {
@@ -2357,7 +2393,8 @@ function startCron() {
     everyMs: Math.max(5, config.cron?.sequenceCheckEveryMin ?? 60) * 60_000,
     description: '邮件跟进序列到期执行(Day0/3/7/14)',
     fn: cronMod.createSequenceJob({
-      sendEmail: async ({ lead, to, subject, body, inReplyTo, isFirstEmail }) => sendEmailGuarded({ to, toName: lead.company, subject, body, leadId: lead.id, actor: 'cron', inReplyTo, isFirstEmail }),
+      // 启动序列本身是用户的显式操作（等同 Instantly 的"激活"），标记为已批准
+      sendEmail: async ({ lead, to, subject, body, inReplyTo, isFirstEmail }) => sendEmailGuarded({ to, toName: lead.company, subject, body, leadId: lead.id, actor: 'cron', inReplyTo, isFirstEmail, approvedVia: 'sequence-start' }),
     }),
   });
   const waMin = config.cron?.waSyncEveryMin ?? 30;

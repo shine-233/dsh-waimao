@@ -93,6 +93,15 @@ const brSeq = newSequence({ language: 'pt' });
 fillFollowUpSteps(brSeq, { market: 'br', language: 'pt' });
 assert.ok(brSeq.steps[1].body.includes('Atenciosamente'), 'br 跟进应为葡语');
 
+/* ---------- 首触审批闸（gtm-mcp/Instantly 的"激活"模式） ---------- */
+const { coldSendNeedsApproval } = await import('../dsh/index.js');
+assert.equal(coldSendNeedsApproval({ approvedVia: undefined, actor: 'agent', inReplyTo: undefined }, false), true, '智能体首触默认拦截');
+assert.equal(coldSendNeedsApproval({ approvedVia: 'sop', actor: 'agent', inReplyTo: undefined }, false), false, 'SOP 已批准放行');
+assert.equal(coldSendNeedsApproval({ approvedVia: 'sequence-start', actor: 'cron', inReplyTo: undefined }, false), false, 'cron 序列视为用户已激活');
+assert.equal(coldSendNeedsApproval({ actor: 'agent', inReplyTo: '<orig@x>' }, false), false, '回复/线程跟进放行');
+assert.equal(coldSendNeedsApproval({ actor: 'user', inReplyTo: undefined }, false), false, '网页人工发送放行');
+assert.equal(coldSendNeedsApproval({ actor: 'agent', inReplyTo: undefined }, true), false, '显式解除开关放行');
+
 /* ---------- A/B 分组：按线索 ID 稳定哈希 ---------- */
 const indexMod = await import('../dsh/index.js');
 assert.equal(indexMod.abVariant('lead-001'), indexMod.abVariant('lead-001'), '同一线索分组必须稳定');

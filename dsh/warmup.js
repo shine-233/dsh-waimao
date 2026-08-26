@@ -14,7 +14,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { DATA_DIR, readConfig } from './config.js';
-import { audit, queryAudit } from './audit.js';
+import { audit, queryAudit, startOfLocalDay } from './audit.js';
 import { sendMail } from './mail/smtp.js';
 import { imapLogin, imapSelect, imapSearchFrom, imapFetchMessage, imapLogout } from './mail/imap.js';
 
@@ -268,14 +268,33 @@ export async function runWarmupRound({ signal } = {}) {
   }
   save(db);
 
-  // 发送侧：按天偏移轮换配对，每发件方受自身 rampCap 约束
+  // 发送侧：按天偏移轮换配对。每发件方受两层约束：
+  //   1) 自身 rampCap（预热爬坡）
+  //   2) smtp.mailboxTotalCap 总上限余量 = cap - 今日业务发送 - 今日预热发送
+  //     （对齐 Instantly：campaign daily_limit 与 warmup limit 分开计，但服务商
+  //      只看邮箱当天总量，所以业务发得多时预热自动让路）
   const dayOffset = Math.floor(Date.now() / 86_400_000);
   const results = [];
   const sentByParticipant = new Map();
   const maxPerDay = Number(config.warmup?.maxPerDay ?? 30);
+  const totalCap = Number(config.smtp?.mailboxTotalCap ?? 0) || 0;
+  const sentTodayByAccount = new Map();
+  try {
+    for (const entry of queryAudit({ action: 'email.send', since: startOfLocalDay(), limit: 5000 })) {
+      const account = entry.detail?.account;
+      if (account) {
+        sentTodayByAccount.set(account, (sentTodayByAccount.get(account) ?? 0) + 1);
+      }
+    }
+  } catch {}
   const budgetOf = (participant) => {
     const days = Math.floor((Date.now() - Date.parse(db.startedBy[participant.email])) / 86_400_000);
-    return rampCap(days, maxPerDay);
+    const ramp = rampCap(days, maxPerDay);
+    if (totalCap <= 0) {
+      return ramp;
+    }
+    const used = (sentTodayByAccount.get(participant.email) ?? 0) + (sentByParticipant.get(participant.email) ?? 0);
+    return Math.max(0, Math.min(ramp, totalCap - used));
   };
 
   for (const [senderIdx, receiverIdx] of pairRotation(pool.length, dayOffset)) {
@@ -284,8 +303,8 @@ export async function runWarmupRound({ signal } = {}) {
     }
     const sender = pool[senderIdx];
     const receiver = pool[receiverIdx];
-    if (sentByParticipant.get(sender.email) >= budgetOf(sender)) {
-      results.push({ leg: 'skipped', from: sender.email, ok: false, error: `已达自身爬坡上限 ${budgetOf(sender)}` });
+    if ((sentByParticipant.get(sender.email) ?? 0) >= budgetOf(sender)) {
+      results.push({ leg: 'skipped', from: sender.email, ok: false, error: `已达自身爬坡上限 ${budgetOf(sender)}${totalCap > 0 ? `（总上限 ${totalCap}，含今日业务发送）` : ''}` });
       continue;
     }
     const tag = randomUUID().slice(0, 8);
@@ -298,7 +317,7 @@ export async function runWarmupRound({ signal } = {}) {
         subject: content.subject, body: content.body,
       });
       sentByParticipant.set(sender.email, (sentByParticipant.get(sender.email) ?? 0) + 1);
-      audit('email.warmup', { leg: 'pool', from: sender.email, to: receiver.email, tag }, 'cron');
+      audit('email.warmup', { leg: 'pool', account: sender.email, from: sender.email, to: receiver.email, tag }, 'cron');
       results.push({ leg: 'pool', from: sender.email, to: receiver.email, ok: true });
     } catch (error) {
       results.push({ leg: 'pool', from: sender.email, to: receiver.email, ok: false, error: String(error?.message ?? error).slice(0, 120) });

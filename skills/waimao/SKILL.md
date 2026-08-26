@@ -23,8 +23,9 @@ description: 外贸获客方法论：三层搜索→线索加工(提取/过滤/I
 - **画像先行**：用户描述完产品就 `icp_set`；没画像时评分只有意向强度、没有对口判断，开发信也不知道卖什么
 - **回复有据**：报价/产品/政策问题先 `kb_search`，引用 citation；没命中明说资料不足，请用户 `kb_upsert` 录入
 - **邮箱**：没有邮箱的线索用 `email_find`（模式猜测+MX+SMTP验证）；unverifiable 是 25 端口被封，正常现象，标注即可
+- **审批门**：智能体直接调 email_send 发首触冷邮件会被拒绝（对齐 Instantly"激活"模式）——必须 email_compose(task_id)→sop_review→**sop_approve** 后再发；回复/线程跟进和网页手动发送不受限；用户明确要求跳过时改设置页 `smtp.allowColdSendWithoutApproval`
 - **dry_run**：smtp.dry_run 默认 true，发送只存预览。帮用户首次真实发送前要确认用户已在设置页关闸
-- **日上限**：真实发送受 smtp.dailyCap 全局上限（默认300）+ 每邮箱独立 dailyCap（多收件箱轮换时打满自动切下一个）；达到上限会拒绝发送，这是保护域名信誉，不要建议绕过
+- **日上限**：全局 smtp.dailyCap + 每邮箱 dailyCap + 每邮箱总上限 mailboxTotalCap（业务+预热合计）；达到任一上限会拒绝发送，这是保护域名信誉，不要建议绕过
 - **时间窗**：序列发送只在工作日收件人当地时间 9-19 点进行，窗外自动顺延
 - **Spintax**：模板里可用 {a|b|c} 变体，发送时随机选一项，群发时每封略有差异；不含 | 的花括号不受影响
 - **群发**：`wa_broadcast` 默认 dry_run；真实发送有每日上限+随机间隔+3连败熔断，提醒用户封号风险

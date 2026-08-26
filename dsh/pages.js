@@ -734,7 +734,9 @@ const SETTINGS_SECTIONS = [
     ['from', '发件人', 'text'],
     ['fromName', '发件人名', 'text'],
     ['dryRun', 'dry-run 总闸', 'select', [['true', 'true（安全，只预览）'], ['false', 'false（真实发送）']]],
-    ['dailyCap', '每日真实发送上限（新域名建议 20-30，0=不限制）', 'number'],
+    ['dailyCap', '每日真实发送上限-全局（新域名建议 20-30，0=不限制）', 'number'],
+    ['mailboxTotalCap', '每邮箱每日总上限（业务+预热合计，Instantly 式硬顶，0=不限制）', 'number'],
+    ['allowColdSendWithoutApproval', '首触冷邮件免审批（绕过 SOP 审批门，自担风险）', 'select', [['false', 'false（默认，需审批）'], ['true', 'true（解除）']]],
     ['plainText', '纯文本模式（不注入追踪，投递率更好）', 'select', [['false', '关'], ['true', '开']]],
   ] },
   { key: 'imap', title: 'IMAP 回复检测', test: 'imap', fields: [
@@ -830,7 +832,7 @@ function settingsPage() {
     `var sec=el.getAttribute('data-section'),key=el.getAttribute('data-key');` +
     `patch[sec]=patch[sec]||{};var v=el.value;` +
     `if(el.type==='number'||['perLayer','port','staleDays','dailyBroadcastCap','minDelaySec','maxDelaySec','waSyncEveryMin','sequenceCheckEveryMin','replyScanEveryMin','monitorEveryHour','maxPerDay','dailyCap'].indexOf(key)>=0){v=Number(v);}` +
-    `if(['dryRun','enabled','plainText'].indexOf(key)>=0){v=v==='true';}` +
+    `if(['dryRun','enabled','plainText','allowColdSendWithoutApproval'].indexOf(key)>=0){v=v==='true';}` +
     `if(SECRET_KEYS.indexOf(key)>=0&&!v){return;}` +
     `patch[sec][key]=v;});` +
     `api('api/config',{method:'POST',body:JSON.stringify(patch)})` +

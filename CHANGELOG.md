@@ -28,6 +28,11 @@
 - Evolution `sendMedia` base64 分支改 v2 扁平格式（`mediaMessage` 是 webhook 接收载荷的形状，发信会失败）
 - GitHub 仓库描述乱码已修复（`gh repo edit`）
 
+### 设计决策对齐成熟项目（Instantly OpenAPI / gtm-mcp 实战）
+- **首触冷邮件审批闸**（学 Instantly 的"活动激活"+gtm-mcp 双人工门）：智能体直接调 email_send 发首触默认拒绝，必须走 SOP 已批准草稿；网页手动发送、回复/线程跟进、cron 序列（启动即用户激活）不受限；`smtp.allowColdSendWithoutApproval=true` 显式解除。此前"不传 task_id 可绕过审批"的口子已堵上
+- **每邮箱总上限 `smtp.mailboxTotalCap`**（学 Instantly 的 daily_limit_max）：业务+预热合计封顶——服务商只看邮箱当天总量，业务发得多时预热自动让路（预热预算 = min(爬坡上限, 总上限余量)）。此前预热完全不吃任何与业务相关的上限
+- 设置页同步两个新开关；email_send 工具描述如实说明闸门行为
+
 ### 工具数
 48 → **50**（并行线加了 instantly_campaign_list / instantly_push_leads）；网页 4 → **5**
 

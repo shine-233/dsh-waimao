@@ -17,7 +17,7 @@
 | 🌐 **谷歌获客** | 三层公式（基础搜索/LinkedIn职位定向/采购信号）、18个市场预设、逐层去重、引擎自动 failover、Google Maps 商家数据源(serpapi)、CSV导出 |
 | 🧪 **线索加工** | 抓页提取邮箱/WhatsApp/电话/社媒、**规则引擎过滤**（同行/B2B平台/黄页/招聘/社媒一眼排除）、**AI评分0-12分**（🔴极高/🟠高/🟡中/🟢低+开发建议）、自动入CRM去重合并 |
 | 📧 **邮箱发现验证** | 35+模式猜测 + MX记录 + SMTP RCPT探测 + catch-all检测（hunter.io 开源平替） |
-| ✉️ **开发信** | DeepSeek 个性化生成（带知识库引用）/ 三语模板兜底（英/西/**葡**，拉美自动切西语、巴西切葡语）、零依赖SMTP客户端、**dry-run 总闸默认开**、**回复线程头**、**退订脚注**、**Spintax 变体**（{a\|b\|c} 群发每封略有差异）、**每日发送上限**（全局+每邮箱独立 cap，多收件箱轮换） |
+| ✉️ **开发信** | DeepSeek 个性化生成（带知识库引用）/ 三语模板兜底（英/西/**葡**）、零依赖SMTP客户端、**dry-run 总闸默认开**、**首触审批闸**、**回复线程头**、**退订脚注**、**Spintax 变体**、**三层日上限**（全局 / 每邮箱业务 / 每邮箱业务+预热总顶） |
 | 📬 **回复检测闭环** | **IMAP 扫描买家回复 → 正则先过滤(免费) → 模糊回复才调 AI**，12 类细分（感兴趣/约会议/询价/提问/拒绝/已离职/转介同事/休假/退订/退信）→ 自动改 replied + 停序列；退订进抑制列表、**退信整域名拉黑** |
 | 🛡️ **合规** | 抑制列表（地址+域名两级，发送强制拦截）、退订提示行（认 STOP/ALTO/PARAR）、全量审计日志 |
 | 📤 **标准导出** | CRM/搜索结果一键导出 Instantly/Smartlead 标准列（email/first_name/company/reason...），免映射导入；`reason` 字段带"为什么选这条线索" |
@@ -85,7 +85,9 @@ npx -y @deepseek-ai/dsh plugin --profile web add github:shine-233/dsh-waimao
     "host": "smtp.gmail.com", "port": 465, "secure": true,
     "user": "", "pass": "", "from": "", "fromName": "Sales",
     "dryRun": true,         // ⚠️ 总闸：确认能跑通后再改 false
-    "dailyCap": 300,        // 每日真实发送上限，新域名建议 20-30
+    "dailyCap": 300,        // 每日真实发送上限-全局，新域名建议 20-30
+    "mailboxTotalCap": 50,  // 每邮箱每日总上限（业务+预热合计），新域名建议 50
+    "allowColdSendWithoutApproval": false, // 首触冷邮件审批闸：false=智能体必须走 SOP 审批
     "plainText": false,     // 纯文本模式：不注入追踪，投递率更好
     "sendWindow": true      // 序列发送时间窗：收件人当地时间工作日 9-19 点之外顺延
   },
@@ -124,7 +126,7 @@ cron 每天自动跑一轮预热池互动：池内邮箱按天轮换配对互发
 
 - 所有网页/API 只接受回环+同源请求；webhook 必须带 token
 - API key/邮箱密码只存本机，浏览器永远拿不到
-- 邮件 dry-run 总闸默认开；走 SOP 流程的发送强制使用人工批准过的草稿（哈希绑定，改动即失效）——绕开 SOP 直接调 `email_send` 不受此门约束，靠 dry_run/日上限兜底
+- 邮件 dry-run 总闸默认开；**首触冷邮件需人工审批**（SOP 已批准草稿或网页手动发送，对齐 Instantly"激活"模式）；走 SOP 流程的发送强制使用批准稿（哈希绑定）
 - 群发默认 dry_run，真实发送有频控+熔断；全部动作进审计日志（`audit_query` 可查）
 
 ## 兼容性

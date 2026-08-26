@@ -69,6 +69,14 @@ export const DEFAULT_CONFIG = {
     // 每日真实发送上限（所有账号合计，按审计日志统计）。0 = 不限制。
     // 新域名建议 20-30/天起步，稳定两周后再逐步上调。
     dailyCap: 300,
+    // 每邮箱每日总上限（业务+预热合计）。Instantly 的 daily_limit_max 思路：
+    // 服务商只看邮箱当天总发信量。0=不限制；新域名建议 50（预热爬坡另算且更严）。
+    mailboxTotalCap: 0,
+    // 首触冷邮件审批闸（对齐 Instantly 的"活动激活"模式）：
+    // false=智能体直接调 email_send 发首触邮件会被拒绝，必须走
+    // email_compose(task_id)→sop_review→sop_approve 流程；网页手动发送、
+    // 回复/线程跟进、cron 序列不受影响。设 true 即解除（自担进垃圾箱/投诉风险）。
+    allowColdSendWithoutApproval: false,
     // 纯文本模式：true 时不生成 HTML 替身（也不注入打开/点击追踪）。
     // 纯文本投递率更好，Cold outreach 的常见做法。
     plainText: false,
@@ -254,6 +262,8 @@ export function configSummary() {
       hasPass: hasKey(config.smtp.pass),
       dryRun: config.smtp.dryRun !== false,
       dailyCap: Number(config.smtp.dailyCap ?? 0) || 0,
+      mailboxTotalCap: Number(config.smtp.mailboxTotalCap ?? 0) || 0,
+      allowColdSendWithoutApproval: config.smtp.allowColdSendWithoutApproval === true,
       plainText: config.smtp.plainText === true,
     },
     imap: {
