@@ -14,6 +14,8 @@ import assert from 'node:assert';
 import net from 'node:net';
 import http from 'node:http';
 import { readFileSync, writeFileSync } from 'node:fs';
+// CI 健壮性：断言失败 / 未捕获拒绝时立即退出，避免 server 句柄让进程挂起白跑 6 小时
+process.on('unhandledRejection', (reason) => { console.error('Unhandled rejection:', reason); process.exit(1); });
 
 const CFG = `${process.env.USERPROFILE}\\.waimao\\config.json`;
 const originalRaw = (() => { try { return readFileSync(CFG, 'utf8'); } catch { return ''; } })();
@@ -608,3 +610,5 @@ if (originalRaw) {
   try { require('node:fs').unlinkSync(CFG); } catch {}
 }
 console.log('ALL E2E LOCAL-SIMULATION TESTS PASSED');
+// 强制退出：仿真 server 已 .close()，但 keep-alive 连接会维持事件循环，导致 node 进程不退出
+process.exit(0);
