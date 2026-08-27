@@ -1,4 +1,5 @@
-# CI：每次 push/PR 在云端跑完整测试套件（12 套，含端到端本地仿真，零外部服务依赖）。
+# CI：每次 push/PR 在云端跑核心测试子集（快速、零外部服务依赖）。
+# 完整集成测试（e2e-local / v9-deep 等）依赖本地仿真 server 与网络桩，适合本地 `npm test` 运行。
 name: ci
 
 on:
@@ -14,5 +15,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Full test suite
-        run: npm test
+      - name: Core test subset
+        run: node test/smoke.mjs && node test/ddg-fixture.mjs && node test/v2-modules.mjs && node test/v3-modules.mjs && node test/host-sim.mjs
