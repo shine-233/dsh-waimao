@@ -43,7 +43,6 @@ assert.deepEqual(
     'quote_pdf',
     'site_emails', 'site_harvest',
     'sop_approve', 'sop_create', 'sop_next', 'sop_review', 'sop_status',
-    'site_harvest',
     'stats_report',
     'template_delete', 'template_list', 'template_save',
     'video_script',
