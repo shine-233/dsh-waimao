@@ -49,7 +49,7 @@ description: 外贸获客方法论：三层搜索→线索加工(提取/过滤/I
 |---|---|
 | 画像 | icp_set |
 | 搜索 | lead_search / lead_export_csv |
-| 加工 | lead_enrich / lead_score / email_find / email_verify / company_dossier |
+| 加工 | lead_enrich / lead_score / email_find / email_verify / site_harvest / company_dossier |
 | 邮件 | email_compose / email_send / email_sequence_start / email_sequence_status / **email_scan_replies** / email_suppress / **stats_report** |
 | CRM | crm_list / crm_update / crm_activity / crm_export / **monitor_watch** / **monitor_check** |
 | SOP | sop_create / sop_next / sop_review / sop_approve / sop_status |

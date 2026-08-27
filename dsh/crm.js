@@ -304,8 +304,10 @@ export function importLeads(rows, { actor = 'user' } = {}) {
       // 否则导出的 CSV 改完再导回来，联系方式全部静默丢失
       const emails = String(row.email ?? row.emails ?? row['邮箱'] ?? '').split(/[\s;,]+/).filter((item) => item.includes('@'));
       const whatsapps = String(row.whatsapp ?? row.whatsapps ?? row['WhatsApp'] ?? row.phone ?? row['电话'] ?? '').split(/[\s;,]+/).map((item) => item.replace(/\D/g, '')).filter((item) => item.length >= 8);
-      const company = String(row.company ?? row['公司'] ?? '').trim();
+      // Apollo/Hunter 导出风格表头（company_name / website / linkedin_url）
+      const company = String(row.company ?? row.company_name ?? row['公司'] ?? '').trim();
       const url = String(row.url ?? row.domain ?? row.website ?? row['链接'] ?? '').trim();
+      const title = String(row.title ?? row.job_title ?? '').trim();
       if (!company && !url && emails.length === 0 && whatsapps.length === 0) {
         results.skipped += 1;
         continue;
@@ -319,7 +321,7 @@ export function importLeads(rows, { actor = 'user' } = {}) {
         contacts: { emails, whatsapps, phones: [], socials: linkedin ? { linkedin: [linkedin] } : {} },
         score: Number(row.score ?? row['评分'] ?? 0) || 0,
         tier: String(row.tier ?? row['分层'] ?? '').trim() || undefined,
-        title: String(row.title ?? '').slice(0, 120),
+        title: (title || String(row.title ?? '')).slice(0, 120),
         snippet: String(row.snippet ?? row['摘要'] ?? '').slice(0, 300),
       }, { actor, merge: true });
       if (merged) {
@@ -332,6 +334,123 @@ export function importLeads(rows, { actor = 'user' } = {}) {
     }
   }
   return results;
+}
+
+const normCompanyKey = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '');
+
+function pushToMap(map, key, value) {
+  if (!key) return;
+  const list = map.get(key) ?? [];
+  list.push(value);
+  map.set(key, list);
+}
+
+/** 疑似重复线索分组：同公司名（归一化）/共享邮箱/共享手机尾号。 */
+export function findDuplicateGroups({ limit = 300 } = {}) {
+  const leads = listLeads({ limit });
+  const byCompany = new Map();
+  const byEmail = new Map();
+  const byPhone = new Map();
+  for (const lead of leads) {
+    pushToMap(byCompany, normCompanyKey(lead.company).slice(0, 40), lead);
+    for (const email of lead.contacts?.emails ?? []) {
+      pushToMap(byEmail, String(email).toLowerCase(), lead);
+    }
+    for (const phone of [...(lead.contacts?.whatsapps ?? []), ...(lead.contacts?.phones ?? [])]) {
+      pushToMap(byPhone, String(phone).replace(/\D/g, '').slice(-8), lead);
+    }
+  }
+  const groups = [];
+  const seen = new Set();
+  const addGroup = (reason, key, members) => {
+    if (members.length < 2) return;
+    const sig = `${reason}:${members.map((m) => m.id).sort().join('|')}`;
+    if (seen.has(sig)) return;
+    seen.add(sig);
+    groups.push({
+      reason,
+      key: String(key).slice(0, 60),
+      leads: members
+        .map((m) => ({ id: m.id, company: m.company || m.domain, score: m.score ?? 0, status: m.status, emails: (m.contacts?.emails ?? []).length }))
+        .sort((a, b) => b.score - a.score),
+    });
+  };
+  byCompany.forEach((ms, k) => addGroup('same-company', k, ms));
+  byEmail.forEach((ms, k) => addGroup('shared-email', k, ms));
+  byPhone.forEach((ms, k) => addGroup('shared-phone', k, ms));
+  return groups.sort((a, b) => b.leads.length - a.leads.length);
+}
+
+/**
+ * 合并线索：联系方式/来源/标签/社媒取并集，分数分层取高，活动并入 keeper。
+ * keepId 缺省时自动选分最高的。被合并的线索删除。
+ */
+export function mergeLeads(keepId, removeIds, actor = 'user') {
+  const db = load();
+  const ids = [...new Set(removeIds.filter((id) => id && id !== keepId))];
+  const keep = db.leads.find((lead) => lead.id === keepId);
+  if (!keep) {
+    throw new Error(`lead not found: ${keepId}`);
+  }
+  if (ids.length === 0) {
+    throw new Error('没有要合并的线索');
+  }
+  const others = [];
+  for (const id of ids) {
+    const other = db.leads.find((lead) => lead.id === id);
+    if (!other) {
+      throw new Error(`lead not found: ${id}`);
+    }
+    others.push(other);
+  }
+  // keeper 缺省规则：显式指定优先；否则分数最高者
+  const all = [keep, ...others];
+  const best = all.reduce((a, b) => ((b.score ?? 0) > (a.score ?? 0) ? b : a));
+  const keeper = keep.score >= (best.score ?? 0) || keepId === keep.id ? keep : best;
+
+  const uniq = (list) => [...new Set(list)];
+  keeper.contacts.emails = uniq([
+    ...(keeper.contacts?.emails ?? []),
+    ...others.flatMap((o) => o.contacts?.emails ?? []),
+  ]);
+  keeper.contacts.whatsapps = uniq([
+    ...(keeper.contacts?.whatsapps ?? []),
+    ...others.flatMap((o) => o.contacts?.whatsapps ?? []),
+  ]).map((v) => String(v).replace(/\D/g, ''));
+  keeper.contacts.phones = uniq([
+    ...(keeper.contacts?.phones ?? []),
+    ...others.flatMap((o) => o.contacts?.phones ?? []),
+  ]);
+  for (const other of others) {
+    for (const [key, list] of Object.entries(other.contacts?.socials ?? {})) {
+      keeper.contacts.socials[key] = uniq([...(keeper.contacts.socials?.[key] ?? []), ...list]).slice(0, 3);
+    }
+  }
+  keeper.sources = uniq([...(keeper.sources ?? []), ...others.flatMap((o) => o.sources ?? [])]);
+  keeper.tags = uniq([...(keeper.tags ?? []), ...others.flatMap((o) => o.tags ?? [])]);
+  for (const other of others) {
+    if ((other.score ?? 0) > (keeper.score ?? 0)) {
+      keeper.score = other.score;
+      keeper.tier = other.tier ?? keeper.tier;
+    }
+    if (!keeper.advice && other.advice) keeper.advice = other.advice;
+    if (!keeper.fit && other.fit) keeper.fit = other.fit;
+    if (!keeper.sequence && other.sequence) keeper.sequence = other.sequence;
+    if (!keeper.lastMessageId && other.lastMessageId) keeper.lastMessageId = other.lastMessageId;
+    if (!keeper.lastReply && other.lastReply) keeper.lastReply = other.lastReply;
+    keeper.activities.push(...(other.activities ?? []));
+  }
+  keeper.activities.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+  keeper.activities = keeper.activities.slice(-200);
+  keeper.updatedAt = new Date().toISOString();
+  keeper.activities.push({
+    ts: keeper.updatedAt, type: 'merge', actor,
+    note: `合并自: ${others.map((o) => o.company || o.domain).join(', ')}`,
+  });
+  db.leads = db.leads.filter((lead) => !ids.includes(lead.id));
+  save(db);
+  audit('crm.merge', { keepId: keeper.id, removed: ids }, actor);
+  return { merged: true, keeper, removedCount: ids.length };
 }
 
 export function storeFile() {

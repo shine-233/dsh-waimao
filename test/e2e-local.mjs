@@ -557,6 +557,45 @@ await tools.get('email_send').execute({ lead_id: lead4.id, subject: 'within cap'
 await assert.rejects(() => tools.get('email_send').execute({ lead_id: lead4.id, subject: 'over cap', body: 'no' }), /全局上限/);
 console.log('8. dailyCap 全局闸门 OK');
 
+/* ================= 9. 邮箱预热池全流程（互发+自动回复+标星+救垃圾箱） ================= */
+{
+  // 假 IMAP 的 FETCH 剧本换成预热主题（engage 靠 WARMUP_TAG 识别预热邮件）
+  imapState.fetchPayload = buildFetchPayload('sales@mycompany.test', '<warmup-1@mycompany.test>', '[waimao-warmup] e2e Quick hello', qpEncode('Quick hello between our inboxes.'));
+  imapHandle.server.close();
+  imapHandle = await startImap(imapState);
+  const cfgWarm = JSON.parse(readFileSync(CFG, 'utf8'));
+  cfgWarm.warmup = { enabled: true, maxPerDay: 30 };
+  cfgWarm.imap.port = imapHandle.port;
+  // 池 = 主账号 + 一个伙伴账号（SMTP/IMAP 都指向本地假服务器）
+  cfgWarm.smtp.accounts = [{
+    host: '127.0.0.1', port: smtp.port, secure: false, user: 'user@a.com', pass: 'secret',
+    from: 'partner@mycompany.test', fromName: 'Partner',
+    imapHost: '127.0.0.1', imapPort: imapHandle.port, imapSecure: false, imapUser: 'imap@a.com', imapPass: 'imapsecret',
+  }];
+  writeCfg(cfgWarm);
+
+  const beforeWarm = smtp.state.messages.length;
+  const warmResult = await tools.get('warmup_status').execute({ action: 'run' });
+  assert.ok(!warmResult.skipped, `预热应执行: ${JSON.stringify(warmResult).slice(0, 200)}`);
+  const poolLegs = warmResult.results.filter((r) => r.leg === 'pool' && r.ok);
+  assert.equal(poolLegs.length, 2, `两个邮箱应互发（2 条腿），实际 ${poolLegs.length}`);
+  const warmMimes = smtp.state.messages.slice(beforeWarm);
+  assert.ok(warmMimes.every((m) => m.includes('[waimao-warmup]')), '预热邮件应带标签');
+  // 收件侧互动：自动回复 + 救垃圾箱
+  const engage = warmResult.results.filter((r) => r.leg === 'engage');
+  assert.ok(engage.length >= 1, '至少一个收件方执行了互动');
+  assert.ok(engage.every((e) => e.replied === true), `应自动回复: ${JSON.stringify(engage)}`);
+  assert.ok(engage.every((e) => e.rescued >= 1), `应从垃圾箱挪回: ${JSON.stringify(engage)}`);
+  // 自动回复是真实 SMTP 发送（互动腿）
+  assert.ok(smtp.state.messages.slice(beforeWarm).some((m) => m.includes('Got it')), '自动回复应真实发出');
+  const warmAudits = auditMod.queryAudit({ action: 'email.warmup', limit: 10 });
+  assert.ok(warmAudits.length >= 2, '预热发送应进审计');
+  // 当日 latch：同天再跑应跳过
+  const second = await tools.get('warmup_status').execute({ action: 'run' });
+  assert.ok(second.skipped, '同一天重复跑应跳过');
+  console.log('9. 邮箱预热池全流程（配对互发/自动回复/标星/救垃圾箱/当日latch）OK');
+}
+
 /* ================= 清理 ================= */
 imapHandle.server.close();
 smtp.server.close();

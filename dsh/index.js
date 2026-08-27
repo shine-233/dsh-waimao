@@ -14,6 +14,7 @@ import * as cronMod from './cron.js';
 import * as draftMod from './draft.js';
 import { companyDossier } from './enrich/dossier.js';
 import * as enrichMod from './enrich.js';
+import * as harvestMod from './harvest.js';
 import { findEmail, verifyEmail } from './enrich/emailfind.js';
 import * as evolutionMod from './evolution.js';
 import * as httpMod from './http.js';
@@ -46,6 +47,8 @@ import { calcPrice, quoteLines } from './pricing.js';
 import { proformaPdf } from './pdf.js';
 import { scanMarkets } from './market.js';
 import { videoScript, renderScript, spinText } from './content.js';
+import { harvestSiteContacts } from './harvest.js';
+import { isDisposableDomain, isRoleAddress, suggestDomainFix, getCachedVerification, rememberVerification } from './emailintel.js';
 
 export const name = 'waimao';
 
@@ -69,6 +72,7 @@ export function apply(ctx) {
   registerSequenceStartTool(ctx);
   registerSequenceStatusTool(ctx);
   registerCompanyDossierTool(ctx);
+  registerSiteHarvestTool(ctx);
   registerMonitorWatchTool(ctx);
   registerMonitorCheckTool(ctx);
   registerCrmListTool(ctx);
@@ -102,6 +106,9 @@ export function apply(ctx) {
   registerIcpSetTool(ctx);
   registerDataBackupTool(ctx);
   registerInstantlyTools(ctx);
+  registerSiteEmailsTool(ctx);
+  registerCrmDupesTool(ctx);
+  registerEmailSendTestTool(ctx);
 
   if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (scope) => {
@@ -496,13 +503,34 @@ function registerEmailFindTool(ctx) {
 function registerEmailVerifyTool(ctx) {
   ctx.tools.register({
     name: 'email_verify',
-    description: '验证单个邮箱是否真实可收信（MX + SMTP RCPT TO 探测 + catch-all 检测）。',
-    parameters: { type: 'object', properties: { email: { type: 'string' } }, required: ['email'] },
+    description: '验证单个邮箱是否真实可收信（MX + SMTP RCPT TO 探测 + catch-all 检测）。带情报层：一次性域名直接判 disposable 不做 SMTP；结果缓存 30 天；标注角色地址（info@/sales@ 回复率低）；域名拼写纠错建议（gmial.com→gmail.com）。',
+    parameters: { type: 'object', properties: { email: { type: 'string' }, no_cache: { type: 'boolean', description: '跳过缓存强制重验' } }, required: ['email'] },
     timeoutMs: 120_000,
     isConcurrencySafe: () => false,
     presentCall: (args) => ({ card: 'generic', title: `email_verify: ${args?.email ?? ''}`, kind: 'fetch', rawInput: args }),
     async execute(args) {
-      return verifyEmail(String(args?.email ?? '').trim().toLowerCase());
+      const email = String(args?.email ?? '').trim().toLowerCase();
+      if (!args?.no_cache) {
+        const cached = getCachedVerification(email);
+        if (cached) {
+          return cached;
+        }
+      }
+      const annotate = (result) => ({
+        ...result,
+        role: isRoleAddress(email),
+        domainSuggestion: suggestDomainFix(email.split('@')[1] ?? '') ?? undefined,
+      });
+      // 一次性邮箱域名：B2B 场景几乎必然不是真实买家，直接判死不做 SMTP
+      if (isDisposableDomain(email)) {
+        const result = { email, status: 'disposable', reason: '一次性/临时邮箱域名' };
+        rememberVerification(result);
+        return { ...annotate(result), hint: '临时邮箱，不值得开发' };
+      }
+      const result = await verifyEmail(email);
+      const annotated = annotate(result);
+      rememberVerification(annotated);
+      return annotated;
     },
   });
 }
@@ -1319,6 +1347,156 @@ function registerWaBroadcastTool(ctx) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 工具：邮箱发现验证 + 邮件触达 + 序列                                 */
+/* ------------------------------------------------------------------ */
+
+function registerSiteEmailsTool(ctx) {
+  ctx.tools.register({
+    name: 'site_emails',
+    description:
+      '全站联系人抓取（hunter.io Domain Search 平替）：抓首页+常见联系页（/contact /about /team /impressum...），汇总邮箱/WhatsApp/电话/社媒。可选 verify:true 对前几个邮箱走 MX+SMTP 验证。',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: '公司官网（域名或完整 URL）' },
+        verify: { type: 'boolean', description: '对找到的邮箱做 SMTP 验证，默认 false' },
+        max_pages: { type: 'number', description: '最多抓几页，默认5' },
+      },
+      required: ['url'],
+    },
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: `site_emails: ${args?.url ?? ''}`, kind: 'search', rawInput: args }),
+    async execute(args, exec) {
+      const target = String(args?.url ?? '').trim();
+      const harvest = await harvestMod.harvestSiteContacts(target, { maxPages: Math.min(Math.max(args?.max_pages ?? 5, 1), 10), signal: exec?.signal });
+      let verified = null;
+      if (args?.verify === true && harvest.emails.length > 0) {
+        const { verifyEmail } = await import('./enrich/emailfind.js');
+        verified = [];
+        for (const email of harvest.emails.slice(0, 3)) {
+          verified.push(await verifyEmail(email, { signal: exec?.signal }));
+        }
+        verified.sort((a, b) => (a.status === 'valid' ? -1 : b.status === 'valid' ? 1 : 0));
+      }
+      return {
+        url: target,
+        company: harvest.company,
+        emails: harvest.emails,
+        whatsapps: harvest.whatsapps,
+        phones: harvest.phones,
+        socials: harvest.socials,
+        pagesChecked: harvest.pages.length,
+        ...(verified ? { verified } : {}),
+        hint: harvest.emails.length === 0 ? '没抓到邮箱：站点可能用表单收集或 JS 渲染，试试 email_find 模式猜测+验证' : undefined,
+      };
+    },
+  });
+}
+
+function registerCrmDupesTool(ctx) {
+  ctx.tools.register({
+    name: 'crm_dupes',
+    description:
+      'CRM 查重与合并：按归一化公司名/共享邮箱/共享手机尾号找重复分组。merge:true 时把每组除最高分外的线索并入最高分线索（联系方式取并集，被并者删除）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        merge: { type: 'boolean', description: '默认 false 只报告；true 执行合并' },
+        dry_run: { type: 'boolean', description: 'merge 时默认 true 先看合并计划' },
+        keep_id: { type: 'string', description: '指定保留的线索ID（缺省每组取分最高）' },
+      },
+    },
+    timeoutMs: 30_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: 'crm_dupes', kind: 'update', rawInput: args }),
+    async execute(args) {
+      const groups = crmMod.findDuplicateGroups({});
+      if (args?.merge !== true) {
+        return { groups, total: groups.length, hint: groups.length > 0 ? '确认后 merge:true 执行合并（dry_run 默认先预览计划）' : '没有发现重复' };
+      }
+      const plans = [];
+      for (const group of groups) {
+        const sorted = [...group.leads].sort((a, b) => b.score - a.score);
+        const keeper = args?.keep_id && group.leads.some((l) => l.id === args.keep_id)
+          ? group.leads.find((l) => l.id === args.keep_id).id
+          : sorted[0].id;
+        const removes = group.leads.filter((l) => l.id !== keeper).map((l) => l.id);
+        if (removes.length > 0) {
+          plans.push({ keeper, removes });
+        }
+      }
+      if (args?.dry_run !== false) {
+        return { plan: plans, groupsToMerge: plans.length, note: '确认后 merge:true + dry_run:false 真正执行' };
+      }
+      let merged = 0;
+      const errors = [];
+      for (const plan of plans) {
+        try {
+          await crmMod.mergeLeads(plan.keeper, plan.removes, 'agent');
+          merged += 1;
+        } catch (error) {
+          errors.push(String(error?.message ?? error).slice(0, 100));
+        }
+      }
+      auditMod.audit('crm.dupes.merge', { groups: merged, errors: errors.length }, 'agent');
+      return { mergedGroups: merged, errors };
+    },
+  });
+}
+
+function registerEmailSendTestTool(ctx) {
+  ctx.tools.register({
+    name: 'email_send_test',
+    description:
+      '发测试邮件到自己可控的收件箱（默认 smtp.from）：真实 SMTP 握手+渲染检查，正式群发前验证 SPF/DKIM/签名与排版。不走抑制列表/审批闸（发给自己），仍受 dry_run 与审计约束。',
+    parameters: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: '缺省=smtp.from 自己' },
+        subject: { type: 'string', description: '缺省 [waimao] deliverability test + 时间戳' },
+        body: { type: 'string', description: '缺省一段含链接/中文/长词的渲染探针文本' },
+      },
+    },
+    timeoutMs: 90_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: `email_send_test → ${args?.to ?? 'self'}`, kind: 'send', rawInput: args }),
+    async execute(args) {
+      const smtp = smtpOf();
+      const to = String(args?.to ?? '').trim() || String(smtp.from ?? '');
+      if (!to.includes('@')) {
+        throw new Error('需要收件地址（或先配置 smtp.from）');
+      }
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 14);
+      const subject = String(args?.subject ?? `[waimao] deliverability test ${stamp}`);
+      const body = args?.body ?? [
+        'Deliverability self-test.',
+        '',
+        'Checks in this mail:',
+        '- SPF/DKIM alignment (view original headers)',
+        `- Chinese content: 电吹风专业出口，欢迎询价`,
+        '- Link rendering: https://www.example.com/contact?utm_source=test&utm_medium=email',
+        '- Long word wrap: InternationalizationStandardizationOrganizationSupercalifragilistic',
+        '',
+        `Sent at ${new Date().toISOString()}`,
+      ].join('\n');
+      // 自发自收：跳过抑制/黑名单/审批闸，但尊重 dry_run 并审计
+      if (smtp.dryRun !== false) {
+        return { dryRun: true, message: 'smtp.dry_run=true：未发送。关闸后重试即可真发到自己的收件箱' };
+      }
+      const result = await sendMail(smtpOf(), {
+        from: smtp.from, fromName: smtp.fromName, to,
+        subject, body,
+      });
+      auditMod.audit('email.test', { to, messageId: result.messageId }, 'agent');
+      return { sent: true, to, messageId: result.messageId, tip: '收到后查看"显示原始邮件"检查 SPF=pass / DKIM=pass' };
+    },
+  });
+}
+
+async function waLikeNothing() {}
+
+/* ------------------------------------------------------------------ */
 /* 工具：报价PDF / 定时任务 / 审计                                      */
 /* ------------------------------------------------------------------ */
 
@@ -1914,6 +2092,49 @@ function registerCompanyDossierTool(ctx) {
         throw new Error('需要 lead_id 或 domain');
       }
       return companyDossier({ lead_id: args?.lead_id, domain: args?.domain, signal: exec?.signal });
+    },
+  });
+}
+
+function registerSiteHarvestTool(ctx) {
+  ctx.tools.register({
+    name: 'site_harvest',
+    description:
+      '抓取一个网站首页+站内联系页（/contact /about /team /impressum…，自动发现真实链接），汇总全部联系方式（邮箱/WhatsApp/电话/社媒/公司名）。比 lead_enrich 抓单页更彻底，适合对高价值线索做深度挖掘。传 lead_id 会把结果并入线索档案。',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: '网站首页 URL 或域名' },
+        lead_id: { type: 'string', description: 'CRM 线索ID（可选，结果并入档案）' },
+        max_pages: { type: 'number', description: '最多抓几页，默认5，上限10' },
+      },
+      required: ['url'],
+    },
+    timeoutMs: 180_000,
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({ card: 'generic', title: `site_harvest: ${args?.url ?? ''}`, kind: 'fetch', rawInput: args }),
+    async execute(args, exec) {
+      let target = String(args?.url ?? '').trim();
+      if (!/^https?:\/\//i.test(target)) {
+        target = `https://${target.replace(/^\/+/, '')}`;
+      }
+      const result = await harvestSiteContacts(target, { maxPages: Math.min(Math.max(args?.max_pages ?? 5, 1), 10), signal: exec?.signal });
+      let merged = false;
+      if (args?.lead_id) {
+        const lead = crmMod.getLead(String(args.lead_id));
+        if (lead) {
+          crmMod.updateLead(lead.id, {
+            contacts: {
+              emails: [...new Set([...(lead.contacts.emails ?? []), ...result.emails])],
+              whatsapps: [...new Set([...(lead.contacts.whatsapps ?? []), ...result.whatsapps])],
+              phones: [...new Set([...(lead.contacts.phones ?? []), ...result.phones])],
+              socials: Object.fromEntries([...new Set([...Object.keys(lead.contacts.socials ?? {}), ...Object.keys(result.socials)])].map((key) => [key, [...new Set([...(lead.contacts.socials?.[key] ?? []), ...(result.socials?.[key] ?? [])])].slice(0, 3)])),
+            },
+          }, { activityNote: `站点深挖: ${result.pages.filter((p) => p.ok).length}/${result.pages.length} 页，+${result.emails.length} 邮箱` });
+          merged = true;
+        }
+      }
+      return { ...result, mergedIntoCrm: merged };
     },
   });
 }

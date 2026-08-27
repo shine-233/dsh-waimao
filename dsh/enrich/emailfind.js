@@ -7,6 +7,7 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import { promises as dns } from 'node:dns';
+import { isDisposableDomain, isRoleAddress, suggestDomainFix, getCachedVerification, rememberVerification } from '../emailintel.js';
 
 // 姓名模式 20 个 + 角色地址 15 个 = 35+ 候选（hunter.io 常用模式子集）
 const PATTERNS = [
@@ -177,24 +178,52 @@ export function classifyRcpt(code) {
 
 /**
  * 验证单个邮箱。结果：
- *  valid / invalid / catch-all / unverifiable(25端口不可达、4xx临时失败等) / no-mx / no-dns
+ *  valid / invalid / catch-all / unverifiable(25端口不可达、4xx临时失败等) /
+ *  no-mx / no-dns / disposable(一次性邮箱) / typo(域名疑似拼错)
+ * 附带 role 标记（部门公共邮箱）与缓存命中（30 天内免重探）。
  */
 export async function verifyEmail(email, opts = {}) {
-  const domain = email.split('@')[1];
+  const raw = String(email ?? '').trim();
+  const domain = raw.split('@')[1]?.toLowerCase();
   if (!domain) {
-    return { email, status: 'invalid', reason: 'no domain' };
+    return { email: raw, status: 'invalid', reason: 'no domain' };
+  }
+  // 免费信号先行（AfterShip/devmehq 的通用做法）：一次性域名/拼写纠错不花钱
+  if (isDisposableDomain(domain)) {
+    return { email: raw, status: 'disposable', reason: '一次性/临时邮箱域名，B2B 场景无价值', role: isRoleAddress(raw), disposable: true };
+  }
+  if (opts.useCache !== false) {
+    const cached = getCachedVerification(raw);
+    if (cached) {
+      return { email: raw, ...cached };
+    }
   }
   const dnsResult = await dnsCheck(domain);
   if (dnsResult.noDns) {
-    return { email, status: 'no-dns', reason: 'domain does not resolve' };
+    const suggestion = suggestDomainFix(domain);
+    return {
+      email: raw,
+      status: suggestion ? 'typo' : 'no-dns',
+      reason: suggestion ? `域名不存在——疑似 ${suggestion} 拼写错误` : 'domain does not resolve',
+      ...(suggestion ? { didYouMean: `${raw.split('@')[0]}@${suggestion}` } : {}),
+    };
   }
   if (!dnsResult.hasMx) {
-    return { email, status: 'no-mx', reason: 'no MX record (cannot receive mail)' };
+    const suggestion = suggestDomainFix(domain);
+    if (suggestion) {
+      return { email: raw, status: 'typo', reason: `无 MX 记录——疑似 ${suggestion} 拼写错误`, didYouMean: `${raw.split('@')[0]}@${suggestion}` };
+    }
+    return { email: raw, status: 'no-mx', reason: 'no MX record (cannot receive mail)' };
   }
   const mxHost = dnsResult.mx[0]?.exchange;
   if (!mxHost) {
-    return { email, status: 'no-mx', reason: 'empty MX' };
+    return { email: raw, status: 'no-mx', reason: 'empty MX' };
   }
+  const finish = (result) => {
+    const enriched = { ...result, role: isRoleAddress(raw) };
+    rememberVerification(enriched);
+    return enriched;
+  };
   // 默认用空发件人 <>：探测用途下被普遍接受；.local 假域常被直接拒
   const fromEmail = opts.fromEmail ?? '';
   const mailFrom = fromEmail ? `<${fromEmail}>` : '<>';
@@ -208,23 +237,23 @@ export async function verifyEmail(email, opts = {}) {
         async (socket) => {
           const mail = await smtpCommand(socket, [250], `MAIL FROM:${mailFrom}`);
           if (Math.floor(mail.code / 100) !== 2) {
-            return { email, status: 'unverifiable', reason: `MAIL FROM rejected (${mail.code}) — 无法探测`, mx: mxHost };
+            return finish({ email: raw, status: 'unverifiable', reason: `MAIL FROM rejected (${mail.code}) — 无法探测`, mx: mxHost });
           }
-          const rcpt = await smtpCommand(socket, [250, 251, 550, 551, 553, 554], `RCPT TO:<${email}>`);
+          const rcpt = await smtpCommand(socket, [250, 251, 550, 551, 553, 554], `RCPT TO:<${raw}>`);
           const verdict = classifyRcpt(rcpt.code);
           if (verdict === 'accepted') {
             // 再探一个几乎必然不存在的地址判断 catch-all
             const probe = await smtpCommand(socket, [250, 251, 550, 551, 553, 554], `RCPT TO:<no-such-user-${Date.now()}@${domain}>`);
             if (classifyRcpt(probe.code) === 'accepted') {
-              return { email, status: 'catch-all', reason: 'server accepts any address (result unreliable)', mx: mxHost };
+              return finish({ email: raw, status: 'catch-all', reason: 'server accepts any address (result unreliable)', mx: mxHost });
             }
-            return { email, status: 'valid', reason: rcpt.message.split('\n').pop(), mx: mxHost };
+            return finish({ email: raw, status: 'valid', reason: rcpt.message.split('\n').pop(), mx: mxHost });
           }
           if (verdict === 'temporary') {
             // 灰名单/限流：4xx 说明服务器暂时不表态，判成 invalid 会误杀真实线索
-            return { email, status: 'unverifiable', reason: `temporary failure (${rcpt.code})，稍后可重试`, mx: mxHost };
+            return { email: raw, status: 'unverifiable', reason: `temporary failure (${rcpt.code})，稍后可重试`, mx: mxHost };
           }
-          return { email, status: 'invalid', reason: (rcpt.message.split('\n').pop() ?? '').slice(0, 120), mx: mxHost };
+          return finish({ email: raw, status: 'invalid', reason: (rcpt.message.split('\n').pop() ?? '').slice(0, 120), mx: mxHost });
         },
         { securePort: port === 465 ? 465 : undefined, starttls: port === 587 },
       );
@@ -233,14 +262,14 @@ export async function verifyEmail(email, opts = {}) {
     }
   }
   return {
-    email,
+    email: raw,
     status: 'unverifiable',
     reason: `SMTP probe failed (${String(lastError?.message ?? lastError).slice(0, 100)}) — 25端口常被封，属正常情况`,
     mx: mxHost,
   };
 }
 
-const STATUS_RANK = { valid: 0, 'catch-all': 1, unverifiable: 2, 'no-mx': 3, 'no-dns': 4, invalid: 5 };
+const STATUS_RANK = { valid: 0, 'catch-all': 1, unverifiable: 2, typo: 2, 'no-mx': 3, 'no-dns': 4, disposable: 5, invalid: 6 };
 
 /** 猜测并验证：返回按优先级排序的候选列表（valid 最前）。 */
 export async function findEmail({ name, domain, verify = true, fromEmail, limit = 6, signal } = {}) {

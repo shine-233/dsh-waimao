@@ -4,6 +4,28 @@ import { promises as dns } from 'node:dns';
 
 const COMMON_DKIM_SELECTORS = ['google', 'default', 'selector1', 'selector2', 's1', 'm1', 'k1', 'dkim', 'mail'];
 
+// 收件方邮箱服务商识别（MX 主机 → 服务商）：影响发信策略建议
+const MX_PROVIDERS = [
+  ['Google Workspace', /google|googlemail/i],
+  ['Microsoft 365', /(outlook|hotmail|protection\.outlook|microsoft)\./i],
+  ['Zoho Mail', /zoho/i],
+  ['Yandex', /yandex/i],
+  ['QQ 企业邮箱', /(qq\.com|tencent)/i],
+  ['网易企业邮箱', /(163|126|netease)\.com/i],
+  ['阿里企业邮箱', /aliyun/i],
+  ['腾讯企业邮', /exmail/i],
+];
+
+export function providerFromMxHost(host) {
+  const clean = String(host ?? '').toLowerCase();
+  for (const [name, re] of MX_PROVIDERS) {
+    if (re.test(clean)) {
+      return name;
+    }
+  }
+  return null;
+}
+
 async function txtRecords(name) {
   try {
     return (await dns.resolveTxt(name)).map((chunks) => chunks.join(''));
@@ -28,6 +50,15 @@ export async function deliverabilityCheck(domain, { dkimSelector } = {}) {
   checks.push({ item: 'MX', ok: mx.length > 0, detail: mx.length > 0 ? `${mx.length} 条记录 (${mx.slice(0, 2).map((item) => item.exchange).join(', ')})` : '无 MX 记录——收不了信' });
   if (mx.length === 0) {
     advice.push('没有 MX 记录：这个域名收不了回复，检查邮箱服务 DNS 配置');
+  }
+  const provider = mx.length > 0 ? providerFromMxHost(mx[0].exchange) : null;
+  if (provider) {
+    checks[checks.length - 1].detail += ` — ${provider}`;
+    if (provider === 'Google Workspace') {
+      advice.push('收件方在 Google：DKIM selector 多为 google，发信节奏稳定更容易进收件箱');
+    } else if (provider === 'Microsoft 365') {
+      advice.push('收件方在 Microsoft：对垃圾链接敏感，首封避免短链接和附件');
+    }
   }
 
   // SPF

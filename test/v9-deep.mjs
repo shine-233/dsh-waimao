@@ -42,7 +42,7 @@ plugin.apply({
   tools: { register: (def) => tools.set(def.name, def) },
   inject: (_names, fn) => fn({ webServer: { register: (r) => routes.set(r.path, r) } }),
 });
-assert.equal(tools.size, 50, `工具数应为50，实际 ${tools.size}`);
+assert.equal(tools.size, 54, `工具数应为54，实际 ${tools.size}`);
 
 const configMod = await import('../dsh/config.js');
 // 探针期间固定安全配置（结束后恢复原配置）
@@ -221,6 +221,76 @@ writeFileSync(probePdf, Buffer.from('%PDF-1.4 probe'));
 const mediaResolved = await resolveWaMedia(probePdf, undefined);
 assert.ok(mediaResolved.media.length > 10 && mediaResolved.filename === 'probe-quote.pdf', 'exports 目录文件应自动转 base64');
 await assert.rejects(() => resolveWaMedia(join(USERPROFILE, 'Desktop', `__no_such_${Date.now()}.txt`)), /只允许|不是存在的文件/, '目录白名单外的路径必须拒绝');
+
+/* ---------- 7. v0.8 新功能：邮箱情报 / 站点抓取 / 查重合并 / 测试邮件 ---------- */
+const intel = await import('../dsh/emailintel.js');
+assert.equal(intel.isDisposableDomain('foo@mailinator.com'), true);
+assert.equal(intel.isDisposableDomain('foo@gmail.com'), false);
+assert.equal(intel.isRoleAddress('purchasing@acme.com'), true);
+assert.equal(intel.isRoleAddress('john@acme.com'), false);
+assert.equal(intel.suggestDomainFix('gmial.com'), 'gmail.com');
+assert.equal(intel.suggestDomainFix('gmail.com'), null);
+intel.clearVerificationCache();
+
+// 站点抓取：mock fetch 供首页+/contact 两页
+{
+  const realFetch3 = globalThis.fetch;
+  const pagesHtml = {
+    'https://harv.example/': '<html><title>Harvest Co</title><body><a href="/contact">Contact us</a><a href="https://evil.other/x">x</a></body></html>',
+    'https://harv.example/contact': '<html><body>Mail: <a href="mailto:buy@harv.example">mail</a> WhatsApp:<a href="https://wa.me/8613800001111">wa</a></body></html>',
+  };
+  globalThis.fetch = async (url) => {
+    const target = String(url).replace(/\/$/, '') === 'https://harv.example' ? 'https://harv.example/' : String(url);
+    const html = pagesHtml[target];
+    if (html === undefined) throw new Error(`unexpected ${target}`);
+    return { ok: true, status: 200, text: async () => html };
+  };
+  try {
+    const harvest = await import('../dsh/harvest.js');
+    const out = await harvest.harvestSiteContacts('https://harv.example', { maxPages: 5 });
+    assert.ok(out.emails.includes('buy@harv.example'), `应抓到联系页邮箱: ${JSON.stringify(out.emails)}`);
+    assert.ok(out.whatsapps.includes('8613800001111'));
+    assert.ok(!JSON.stringify(out).includes('evil.other'), '不得抓外站链接');
+    // 工具面
+    const siteTool = tools.get('site_emails');
+    const toolOut = await siteTool.execute({ url: 'https://harv.example' });
+    assert.ok(toolOut.emails.includes('buy@harv.example'));
+  } finally {
+    globalThis.fetch = realFetch3;
+  }
+}
+
+// 查重与合并
+{
+  const a = crmMod.upsertLead({ company: `${uniqTag} Dup`, url: `https://${uniqTag}a.example`, market: 'us',
+    contacts: { emails: [`dup-${uniqTag}@example.com`], whatsapps: [], phones: [], socials: {} }, score: 5 });
+  const b = crmMod.upsertLead({ company: `${uniqTag} dup!!`, url: `https://${uniqTag}b.example`, market: 'us',
+    contacts: { emails: [`dup2-${uniqTag}@example.com`], whatsapps: ['4915199988888'], phones: [], socials: {} }, score: 9 });
+  const groups = crmMod.findDuplicateGroups({});
+  const mine = groups.find((g) => g.key.includes(uniqTag.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40)) || g.leads.some((l) => l.id === a.lead.id));
+  assert.ok(mine, '应识别同公司名重复');
+  const mergeRes = crmMod.mergeLeads(a.lead.id, [b.lead.id], 'user');
+  assert.equal(mergeRes.removedCount, 1);
+  const keeperNow = crmMod.getLead(a.lead.id);
+  assert.equal(keeperNow.score, 9, '分数取高');
+  assert.deepEqual([...new Set([9])].length, 1);
+  assert.ok(keeperNow.contacts.emails.some((e) => e.startsWith('dup2-')), '联系方式并集');
+  assert.ok(crmMod.getLead(b.lead.id) === undefined || crmMod.getLead(b.lead.id) === null, '被并者删除');
+  // 工具面 dry_run 计划
+  const dupeToolOut = await tools.get('crm_dupes').execute({});
+  assert.ok(Array.isArray(dupeToolOut.groups));
+}
+
+// email_send_test：dry_run 下不真发
+{
+  writeFileSync(cfgFile, JSON.stringify({
+    ...(originalRaw ? JSON.parse(originalRaw.replace(/^\uFEFF/, '')) : {}),
+    smtp: { host: 'smtp.local', from: 'me@local.test', dryRun: true },
+    wa: { dryRun: true },
+  }));
+  const out = await tools.get('email_send_test').execute({});
+  assert.equal(out.dryRun, true);
+}
 
 restoreCfg();
 console.log('ALL V9 DEEP PROBES PASSED');
