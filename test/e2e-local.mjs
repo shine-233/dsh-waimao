@@ -589,7 +589,13 @@ console.log('8. dailyCap 全局闸门 OK');
   assert.ok(engage.every((e) => e.replied === true), `应自动回复: ${JSON.stringify(engage)}`);
   assert.ok(engage.every((e) => e.rescued >= 1), `应从垃圾箱挪回: ${JSON.stringify(engage)}`);
   // 自动回复是真实 SMTP 发送（互动腿）
-  assert.ok(smtp.state.messages.slice(beforeWarm).some((m) => m.includes('Got it')), '自动回复应真实发出');
+  const decodedWarmBodies = smtp.state.messages.slice(beforeWarm).map((mime) => {
+    const [headers, body = ''] = mime.split('\r\n\r\n');
+    return /Content-Transfer-Encoding:\s*base64/i.test(headers)
+      ? Buffer.from(body.replace(/\s+/g, ''), 'base64').toString('utf8')
+      : body;
+  });
+  assert.ok(decodedWarmBodies.some((body) => body.includes('Got it')), '自动回复应真实发出');
   const warmAudits = auditMod.queryAudit({ action: 'email.warmup', limit: 10 });
   assert.ok(warmAudits.length >= 2, '预热发送应进审计');
   // 当日 latch：同天再跑应跳过

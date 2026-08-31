@@ -26,15 +26,15 @@ export function providerFromMxHost(host) {
   return null;
 }
 
-async function txtRecords(name) {
+async function txtRecords(name, resolver = dns) {
   try {
-    return (await dns.resolveTxt(name)).map((chunks) => chunks.join(''));
+    return (await resolver.resolveTxt(name)).map((chunks) => chunks.join(''));
   } catch {
     return [];
   }
 }
 
-export async function deliverabilityCheck(domain, { dkimSelector } = {}) {
+export async function deliverabilityCheck(domain, { dkimSelector, resolver = dns } = {}) {
   const clean = String(domain ?? '').toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '');
   if (!clean.includes('.')) {
     throw new Error(`invalid domain: ${domain}`);
@@ -45,7 +45,7 @@ export async function deliverabilityCheck(domain, { dkimSelector } = {}) {
   // MX
   let mx = [];
   try {
-    mx = await dns.resolveMx(clean);
+    mx = await resolver.resolveMx(clean);
   } catch {}
   checks.push({ item: 'MX', ok: mx.length > 0, detail: mx.length > 0 ? `${mx.length} 条记录 (${mx.slice(0, 2).map((item) => item.exchange).join(', ')})` : '无 MX 记录——收不了信' });
   if (mx.length === 0) {
@@ -62,7 +62,7 @@ export async function deliverabilityCheck(domain, { dkimSelector } = {}) {
   }
 
   // SPF
-  const txt = await txtRecords(clean);
+  const txt = await txtRecords(clean, resolver);
   const spf = txt.find((record) => record.toLowerCase().startsWith('v=spf1'));
   checks.push({ item: 'SPF', ok: Boolean(spf), detail: spf ? spf.slice(0, 120) : '未找到 v=spf1 记录' });
   if (!spf) {
@@ -74,7 +74,7 @@ export async function deliverabilityCheck(domain, { dkimSelector } = {}) {
   }
 
   // DMARC
-  const dmarc = await txtRecords(`_dmarc.${clean}`);
+  const dmarc = await txtRecords(`_dmarc.${clean}`, resolver);
   const dmarcRecord = dmarc.find((record) => record.toLowerCase().startsWith('v=dmarc1'));
   checks.push({ item: 'DMARC', ok: Boolean(dmarcRecord), detail: dmarcRecord ? dmarcRecord.slice(0, 120) : '未找到（_dmarc.' + clean + '）' });
   if (!dmarcRecord) {
@@ -85,7 +85,7 @@ export async function deliverabilityCheck(domain, { dkimSelector } = {}) {
   const selectors = [dkimSelector, ...COMMON_DKIM_SELECTORS].filter(Boolean);
   let dkimFound = null;
   for (const selector of [...new Set(selectors)]) {
-    const records = await txtRecords(`${selector}._domainkey.${clean}`);
+    const records = await txtRecords(`${selector}._domainkey.${clean}`, resolver);
     const hit = records.find((record) => (record.toLowerCase().includes('v=dkim1') || record.includes('p=')) && /p=[A-Za-z0-9+/]{8}/.test(record));
     if (hit) {
       dkimFound = { selector, record: hit.slice(0, 100) };

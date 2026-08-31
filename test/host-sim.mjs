@@ -1,5 +1,5 @@
 ﻿// 宿主模拟：像 dsh 一样加载插件入口，收集工具与路由注册，再走一遍
-// lead_search（真实 DDG 请求）与审核 API 流程。
+// 纯本地页面、围栏、CRM 与 cleanup 流程；不访问外部服务。
 import assert from 'node:assert';
 
 const plugin = await import('../dsh/index.js');
@@ -9,11 +9,16 @@ assert.equal(typeof plugin.apply, 'function');
 
 const tools = new Map();
 const routes = new Map();
+const disposers = [];
 const ctx = {
   tools: { register: (def) => tools.set(def.name, def) },
   inject: (names, fn) => {
     assert.deepEqual(names, ['webServer']);
     fn({
+      effect: (setup) => {
+        const dispose = setup();
+        if (typeof dispose === 'function') disposers.push(dispose);
+      },
       webServer: {
         register: (route) => routes.set(route.path, route),
       },
@@ -50,6 +55,13 @@ assert.deepEqual(
     'warmup_status',
   ].sort(),
 );
+for (const tool of tools.values()) {
+  assert.deepEqual(tool.output?.schema, {}, `${tool.name} 缺少通用 JSON output schema`);
+  assert.equal(typeof tool.output?.render, 'function', `${tool.name} 缺少 output renderer`);
+  const rendered = tool.output.render({}, { ok: true });
+  assert.deepEqual(rendered, [{ type: 'text', text: '{\n  "ok": true\n}' }], `${tool.name} output renderer 不合法`);
+}
+assert.equal(disposers.length, 1, 'cron 必须注册一个 scope cleanup');
 // icp_set 落库
 const icpSet = tools.get('icp_set');
 assert.ok(icpSet.parameters.required.includes('product'));
@@ -209,5 +221,7 @@ const res4 = fakeRes();
 await leadsPageRoute.handler(fakeReq('GET'), res4);
 assert.equal(res4.statusCode, 200);
 assert.ok(String(res4.body).includes('谷歌获客'));
+
+for (const dispose of disposers.reverse()) dispose();
 
 console.log('ALL HOST-SIMULATION TESTS PASSED');

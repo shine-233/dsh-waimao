@@ -100,7 +100,12 @@ const isRealBug = (error) => {
   }
   return error instanceof TypeError || !BUSINESS_ERR.test(msg);
 };
-const SKIP_EXECUTE = new Set(['market_scan']); // 真实多市场 SERP，太慢
+const SKIP_EXECUTE = new Set([
+  'market_scan', // 真实多市场 SERP
+  'email_verify', // 真实 MX 查询；由离线模块测试覆盖纯逻辑
+  'deliverability_check', // 真实 MX/TXT 查询；由 v4 DNS fixture 覆盖
+  'monitor_watch', // 真实站点 HTTP；站点抓取在下方用 mock fetch 覆盖
+]);
 
 const realBugs = [];
 const resultsLog = [];

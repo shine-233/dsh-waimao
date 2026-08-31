@@ -54,7 +54,29 @@ export const name = 'waimao';
 
 export const inject = ['tools'];
 
+const JSON_OUTPUT = {
+  // Direct ctx.tools.register() receives compiled JSON Schema. The alpha.2
+  // defineTool DSL compiles { type: 'json' } to this unrestricted schema.
+  schema: {},
+  render(_args, value) {
+    const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    return [{ type: 'text', text: text ?? 'null' }];
+  },
+};
+
 export function apply(ctx) {
+  const hostCtx = ctx;
+  ctx = {
+    tools: {
+      register(definition) {
+        return hostCtx.tools.register({
+          ...definition,
+          output: definition.output ?? JSON_OUTPUT,
+        });
+      },
+    },
+  };
+
   // SOP 阶段机需要读 CRM（避免 ESM 循环依赖，走注入）
   globalThis.__waimaoCrm = crmMod;
 
@@ -110,11 +132,18 @@ export function apply(ctx) {
   registerCrmDupesTool(ctx);
   registerEmailSendTestTool(ctx);
 
-  if (typeof ctx.inject === 'function') {
-    ctx.inject(['webServer'], (scope) => {
+  if (typeof hostCtx.inject === 'function') {
+    hostCtx.inject(['webServer'], (scope) => {
       try {
         registerRoutes(scope);
-        startCron();
+        if (typeof scope.effect === 'function') {
+          scope.effect(() => {
+            startCron();
+            return () => cronMod.stop();
+          });
+        } else {
+          startCron();
+        }
       } catch (error) {
         console.error(`[waimao] web routes skipped: ${error}`);
       }

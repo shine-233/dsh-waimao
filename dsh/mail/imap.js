@@ -70,7 +70,9 @@ class ImapSession {
     let searchFrom = 0;
     for (;;) {
       const literalMatch = this.buffer.slice(searchFrom).match(/\{(\d+)\}\r\n/);
-      const tagIndex = this.buffer.indexOf(`\r\n${tag} `, searchFrom);
+      const tagMarker = this.buffer.startsWith(`${tag} `)
+        ? 0
+        : this.buffer.indexOf(`\r\n${tag} `, searchFrom);
       if (literalMatch) {
         const literalStart = searchFrom + literalMatch.index;
         const literalEnd = literalStart + literalMatch[0].length + Number(literalMatch[1]);
@@ -80,13 +82,14 @@ class ImapSession {
         searchFrom = literalEnd; // 跳过字面量继续找 tag 行
         continue;
       }
-      if (tagIndex === -1) {
+      if (tagMarker === -1) {
         return; // tag 行还没到
       }
       // 完整响应 = buffer 里 tag 行（含）之前的内容
-      const end = this.buffer.indexOf('\r\n', tagIndex + 2);
+      const statusStart = tagMarker === 0 ? 0 : tagMarker + 2;
+      const end = this.buffer.indexOf('\r\n', statusStart);
       const full = this.buffer.slice(0, end + 2);
-      const statusLine = this.buffer.slice(tagIndex + 2, end);
+      const statusLine = this.buffer.slice(statusStart, end);
       this.buffer = this.buffer.slice(end + 2);
       this.pending = null;
       const status = statusLine.split(' ')[1];

@@ -81,13 +81,28 @@ assert.ok(warmup.WARMUP_TAG.includes('waimao-warmup'));
 const warmupRoundV4 = await warmup.runWarmupRound({});
 assert.ok(warmupRoundV4.skipped !== undefined, 'dry_run=true 时预热应直接跳过');
 
-/* ---------- 送达率（真实 DNS，google.com 基本必过） ---------- */
+/* ---------- 送达率（离线 DNS fixture） ---------- */
 const { deliverabilityCheck } = await import('../dsh/deliverability.js');
-const report = await deliverabilityCheck('gmail.com');
+const dnsFixture = {
+  async resolveMx(name) {
+    if (name === 'gmail.com') return [{ priority: 5, exchange: 'gmail-smtp-in.l.google.com' }];
+    throw Object.assign(new Error(`queryMx ENOTFOUND ${name}`), { code: 'ENOTFOUND' });
+  },
+  async resolveTxt(name) {
+    const records = {
+      'gmail.com': [['v=spf1 include:', '_spf.google.com ~all']],
+      '_dmarc.gmail.com': [['v=DMARC1; p=none']],
+      'google._domainkey.gmail.com': [['v=DKIM1; k=rsa; p=fixturePublicKey1234567890']],
+    };
+    if (records[name]) return records[name];
+    throw Object.assign(new Error(`queryTxt ENOTFOUND ${name}`), { code: 'ENOTFOUND' });
+  },
+};
+const report = await deliverabilityCheck('gmail.com', { resolver: dnsFixture });
 assert.ok(report.checks.some((check) => check.item === 'SPF' && check.ok), 'gmail.com 应有 SPF');
 assert.ok(report.checks.some((check) => check.item === 'MX' && check.ok), 'gmail.com 应有 MX');
 assert.ok(report.advice.length >= 1);
-const bad = await deliverabilityCheck('this-domain-definitely-does-not-exist-xyz123.com');
+const bad = await deliverabilityCheck('this-domain-definitely-does-not-exist-xyz123.com', { resolver: dnsFixture });
 assert.ok(bad.advice.length >= 2);
 
 console.log('ALL V0.4 MODULE TESTS PASSED');
